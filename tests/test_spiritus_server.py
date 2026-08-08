@@ -175,6 +175,30 @@ def test_home_dir_is_project_local_not_the_user_home(server, tmp_path):
     assert server.home_dir.is_dir()
 
 
+def test_engine_environment_isolates_every_persistent_path(server, tmp_path):
+    env = server._engine_environment()
+    home = tmp_path / ".opencode-home"
+
+    assert env["HOME"] == str(home)
+    assert env["USERPROFILE"] == str(home)
+    assert env["XDG_DATA_HOME"] == str(home / ".local" / "share")
+    assert env["XDG_CONFIG_HOME"] == str(home / ".config")
+    assert env["XDG_CACHE_HOME"] == str(home / ".cache")
+    assert env["XDG_STATE_HOME"] == str(home / ".local" / "state")
+
+
+def test_engine_environment_does_not_mutate_the_parent_process(server, monkeypatch):
+    monkeypatch.setenv("HOME", "parent-home")
+    monkeypatch.setenv("USERPROFILE", "parent-profile")
+
+    isolated = server._engine_environment()
+
+    assert isolated["HOME"] != "parent-home"
+    assert isolated["USERPROFILE"] != "parent-profile"
+    assert os.environ["HOME"] == "parent-home"
+    assert os.environ["USERPROFILE"] == "parent-profile"
+
+
 def test_start_reports_a_clear_error_when_the_engine_is_absent(server, monkeypatch):
     """The failure must name the command that fixes it, not just the symptom."""
     from spiritus import engine

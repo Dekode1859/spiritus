@@ -9,7 +9,47 @@ from spiritus import AppConfig, WorkspaceFolder
 
 
 def test_public_api_is_exactly_the_documented_surface():
-    assert set(spiritus.__all__) == {"run", "AppConfig", "WorkspaceFolder"}
+    assert set(spiritus.__all__) == {
+        "Access",
+        "Agent",
+        "AgentRuntime",
+        "App",
+        "AppConfig",
+        "ApprovalDecision",
+        "ApprovalRequested",
+        "ApprovalResolved",
+        "Command",
+        "Message",
+        "MCPServer",
+        "Model",
+        "OutputSchema",
+        "OutputValidationError",
+        "RunCompleted",
+        "RunCancelledError",
+        "RunEvent",
+        "RunExecutionError",
+        "RunFailed",
+        "RunHandle",
+        "RunIdle",
+        "RunResult",
+        "RunStarted",
+        "Session",
+        "SessionInfo",
+        "Skill",
+        "StructuredOutputError",
+        "TextDelta",
+        "TextSnapshot",
+        "Tool",
+        "ToolCompleted",
+        "ToolContext",
+        "ToolFailed",
+        "ToolProgress",
+        "ToolStarted",
+        "WorkspaceFolder",
+        "Workspace",
+        "WorkspaceAccess",
+        "run",
+    }
     for name in spiritus.__all__:
         assert hasattr(spiritus, name)
 
@@ -36,6 +76,17 @@ def test_importing_spiritus_does_not_require_a_gui_toolkit():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_builtin_ui_uses_only_spiritus_session_and_event_routes():
+    source = (
+        Path(spiritus.__file__).resolve().parent / "ui" / "app.js"
+    ).read_text(encoding="utf-8")
+    assert "/api/events?session_id=" in source
+    assert "bridge.listSessions()" in source
+    assert "bridge.sendMessage(" in source
+    assert "prompt_async" not in source
+    assert "http://127.0.0.1:${state.port}" not in source
 
 
 class TestWorkspaceFolder:

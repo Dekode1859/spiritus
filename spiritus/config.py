@@ -58,6 +58,7 @@ class AppConfig:
     # Optional environment overrides honored by the runtime (all generic).
     env_port_var: str = "OPENCODE_PORT"
     env_workspace_var: str = "WORKSPACE_PATH"
+    engine_directory: Path | None = None          # scoped OpenCode session worktree
 
     def __post_init__(self):
         self.app_root = Path(self.app_root)
@@ -65,6 +66,11 @@ class AppConfig:
             ui = Path(self.ui_dir)
             # Resolve a relative ui_dir against the app root.
             self.ui_dir = ui if ui.is_absolute() else (self.app_root / ui)
+        if self.engine_directory is not None:
+            engine = Path(self.engine_directory)
+            self.engine_directory = (
+                engine if engine.is_absolute() else self.app_root / engine
+            )
 
     # Convenience for runtime and bridge internals.
     def folder_names(self) -> list[str]:

@@ -55,6 +55,7 @@ def make_bridge(tmp: Path) -> tuple[Bridge, FakeServer]:
 
 class BridgeTestBase(unittest.TestCase):
     def setUp(self):
+        self._client_cls = bridge_mod.OpenCodeClient
         self._provider_hooks = {
             name: getattr(bridge_mod.providers_mod, name)
             for name in ("save_key", "remove_key", "set_default_model")
@@ -66,10 +67,109 @@ class BridgeTestBase(unittest.TestCase):
 
     def tearDown(self):
         import os
+        bridge_mod.OpenCodeClient = self._client_cls
         for name, function in self._provider_hooks.items():
             setattr(bridge_mod.providers_mod, name, function)
         os.environ.pop("WORKSPACE_PATH", None)
         self._tmpdir.cleanup()
+
+
+class FakeOpenCodeClient:
+    def __init__(self, port):
+        self.port = port
+        self.async_calls = []
+        self.deleted = []
+
+    def agents(self):
+        return [
+            {"name": "declared", "model": {"providerID": "opencode", "modelID": "test"}},
+            {"name": "internal"},
+        ]
+
+    def sessions(self):
+        return [{"id": "ses_1", "title": "One"}]
+
+    def create_session(self, body):
+        return {"id": "ses_2", "title": body.get("title", "")}
+
+    def messages(self, session_id):
+        return [{
+            "info": {"id": "msg_1", "sessionID": session_id, "role": "assistant"},
+            "parts": [{"type": "text", "text": "hello"}],
+        }]
+
+    def delete_session(self, session_id):
+        self.deleted.append(session_id)
+
+    def prompt_async(self, session_id, body):
+        self.async_calls.append((session_id, body))
+
+    def reply_permission(self, request_id, reply, *, message=None):
+        self.permission_reply = (request_id, reply, message)
+
+    def events(self):
+        yield {
+            "payload": {
+                "type": "session.status",
+                "properties": {"sessionID": "ses_1", "status": {"type": "busy"}},
+            }
+        }
+        yield {
+            "payload": {
+                "type": "session.idle",
+                "properties": {"sessionID": "ses_1"},
+            }
+        }
+
+
+class TestAgentSessions(BridgeTestBase):
+    def setUp(self):
+        super().setUp()
+        (self.tmp / "opencode.json").write_text(
+            json.dumps({"agent": {"declared": {"description": "Public"}}}),
+            encoding="utf-8",
+        )
+        self.client = FakeOpenCodeClient(self.server.port)
+        bridge_mod.OpenCodeClient = lambda port, **kwargs: self.client
+
+    def test_agents_are_live_but_restricted_to_app_declarations(self):
+        self.assertEqual([item["name"] for item in self.bridge.list_agents()], ["declared"])
+
+    def test_session_crud_uses_the_spiritus_adapter(self):
+        self.assertEqual(self.bridge.list_sessions()[0]["id"], "ses_1")
+        self.assertEqual(self.bridge.create_session("Named")["title"], "Named")
+        self.assertEqual(
+            self.bridge.session_history("ses_1")[0]["parts"][0]["text"], "hello"
+        )
+        self.assertEqual(self.bridge.delete_session("ses_1"), {"ok": True})
+        self.assertEqual(self.client.deleted, ["ses_1"])
+
+    def test_prompt_omits_unspecified_model_instead_of_sending_null(self):
+        self.assertEqual(
+            self.bridge.send_message("ses_1", "declared", None, " hello "),
+            {"ok": True},
+        )
+        _, body = self.client.async_calls[0]
+        self.assertNotIn("model", body)
+        self.assertEqual(body["parts"][0]["text"], "hello")
+
+    def test_event_stream_is_normalized_and_finishes_at_idle(self):
+        self.assertEqual(
+            list(self.bridge.session_events("ses_1")),
+            [
+                {"type": "run.started", "session_id": "ses_1"},
+                {"type": "run.idle", "session_id": "ses_1"},
+            ],
+        )
+
+    def test_permission_reply_is_validated_and_relayed(self):
+        self.assertEqual(
+            self.bridge.reply_permission("per_1", "once"),
+            {"ok": True},
+        )
+        self.assertEqual(self.client.permission_reply, ("per_1", "once", None))
+        with self.assertRaises(ValueError):
+            self.bridge.reply_permission("per_1", "maybe")
 
 
 class TestBrowserAgentScript(unittest.TestCase):

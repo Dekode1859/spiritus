@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from ..config import AppConfig
 from . import paths
@@ -91,6 +92,8 @@ def _make_ui_handler(ui_dir: str, bridge):
         def do_GET(self):
             if self.path == "/api/health":
                 return self._write_json({"ok": True})
+            if self.path.startswith("/api/events"):
+                return self._handle_event_stream()
             return super().do_GET()
 
         def do_POST(self):
@@ -149,6 +152,27 @@ def _make_ui_handler(ui_dir: str, bridge):
                     return self._write_json({"ok": False, "error": str(exc)}, status=500)
             return self._write_json(result)
 
+        def _handle_event_stream(self):
+            target = self._resolve_method("session_events")
+            query = parse_qs(urlparse(self.path).query)
+            session_id = (query.get("session_id") or [""])[0]
+            if target is None or not session_id:
+                return self._write_json(
+                    {"ok": False, "error": "session_id is required"}, status=400
+                )
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            try:
+                for event in target(session_id):
+                    body = json.dumps(event, separators=(",", ":")).encode("utf-8")
+                    self.wfile.write(b"data: " + body + b"\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
         def _resolve_method(self, name: str):
             if not bridge or not name or name.startswith("_"):
                 return None
@@ -203,6 +227,21 @@ def run(config: AppConfig):
     # application, which spawns a third. See runtime/subproc.py.
     dispatch_child()
 
+    # Preserve the established AppConfig entry point while allowing the new
+    # declarative App to use the same shell and bridge.
+    from ..app import App
+
+    tool_server = None
+    if isinstance(config, App):
+        config.compile()
+        if config.tools:
+            from ..tools import ToolServer
+
+            tool_server = ToolServer(config.tools)
+        config = config.to_config()
+    if not isinstance(config, AppConfig):
+        raise TypeError("run() expects an App or AppConfig")
+
     import webview  # imported late so non-GUI tooling can import spiritus cleanly
 
     from ..bridge import Bridge  # late import to avoid a cycle
@@ -211,7 +250,18 @@ def run(config: AppConfig):
     _set_app_name(config.app_title)
 
     proot = paths.project_root(config.app_root, config.app_id)
-    opencode = OpenCodeServer(proot, port_env_var=config.env_port_var)
+    tool_environment = tool_server.start() if tool_server is not None else {}
+    opencode = OpenCodeServer(
+        proot,
+        port_env_var=config.env_port_var,
+        environment=tool_environment,
+    )
+
+    def stop_services():
+        opencode.stop()
+        if tool_server is not None:
+            tool_server.stop()
+
     try:
         opencode.start()
     except RuntimeError as e:
@@ -219,7 +269,7 @@ def run(config: AppConfig):
         print("[spiritus] Continuing without OpenCode — chat will not function.",
               file=sys.stderr)
 
-    atexit.register(opencode.stop)  # covers Ctrl+C and any non-SIGKILL exit
+    atexit.register(stop_services)  # covers Ctrl+C and any non-SIGKILL exit
 
     bridge_cls = config.bridge_cls or Bridge
     bridge = bridge_cls(config, opencode)
@@ -236,8 +286,8 @@ def run(config: AppConfig):
         height=config.window_size[1],
         min_size=config.min_size,
     )
-    window.events.closed += lambda: opencode.stop()
+    window.events.closed += lambda: stop_services()
     try:
         webview.start(debug=False)
     finally:
-        opencode.stop()  # catches KeyboardInterrupt / abrupt exits that skip events.closed
+        stop_services()  # catches KeyboardInterrupt / abrupt exits that skip events.closed

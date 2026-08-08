@@ -51,114 +51,95 @@ const bridge = (() => {
     saveProviderKey:   (pid, key)            => call('save_provider_key', pid, key),
     removeProviderKey: (pid)                 => call('remove_provider_key', pid),
     setDefaultModel:   (pid, mid)            => call('set_default_model', pid, mid),
+    listSessions:      ()                    => call('list_sessions'),
+    createSession:     (title = '')          => call('create_session', title),
+    sessionHistory:    (sessionId)           => call('session_history', sessionId),
+    deleteSession:     (sessionId)           => call('delete_session', sessionId),
+    listAgents:        ()                    => call('list_agents'),
+    sendMessage:       (sessionId, agent, model, text) =>
+      call('send_message', sessionId, agent || '', model || null, text),
   };
 })();
 
-// ── OpenCode HTTP helpers ─────────────────────────────────────────────────────
-async function oc(path, options = {}) {
-  const r = await fetch(`http://127.0.0.1:${state.port}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
-  if (!r.ok) {
-    let detail = '';
-    try { detail = (await r.text()).slice(0, 200); } catch (_) {}
-    throw new Error(`HTTP ${r.status}${detail ? ': ' + detail : ''}`);
-  }
-  // 204 No Content (e.g. prompt_async) and empty bodies must not be JSON-parsed —
-  // WKWebView throws "The string did not match the expected pattern" otherwise.
-  if (r.status === 204) return null;
-  const text = await r.text();
-  return text ? JSON.parse(text) : null;
-}
-function ocGet(path)        { return oc(path); }
-function ocPost(path, body) { return oc(path, { method: 'POST', body: JSON.stringify(body) }); }
-function ocDelete(path)     { return oc(path, { method: 'DELETE' }); }
-
-// ── SSE ───────────────────────────────────────────────────────────────────────
-function connectSSE() {
+// ── Normalized Spiritus event stream ─────────────────────────────────────────
+function connectSessionEvents(sessionId) {
   if (state.sse) state.sse.close();
-  const es = new EventSource(`http://127.0.0.1:${state.port}/event`);
-  state.sse = es;
-  es.onmessage = (e) => {
-    try { handleOCEvent(JSON.parse(e.data)); } catch (_) {}
-  };
-  es.onerror = () => {
-    if (state.port) setTimeout(connectSSE, 3000);
-  };
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/events?session_id=${encodeURIComponent(sessionId)}`);
+    state.sse = es;
+    let opened = false;
+    const timeout = setTimeout(() => {
+      if (!opened) { es.close(); reject(new Error('Event stream did not become ready')); }
+    }, 10000);
+    es.onopen = () => {
+      opened = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+    es.onmessage = (e) => {
+      try { handleSpiritusEvent(JSON.parse(e.data)); } catch (_) {}
+    };
+    es.onerror = () => {
+      clearTimeout(timeout);
+      es.close();
+      if (state.sse === es) state.sse = null;
+      if (!opened) reject(new Error('Event stream failed to connect'));
+    };
+  });
 }
 
-function handleOCEvent(event) {
-  const payload = event.payload || event;
-  const { type, properties } = payload;
-  if (!type) return;
+function handleSpiritusEvent(event) {
+  if (!event?.type || event.session_id !== state.activeSessionId) return;
 
-  switch (type) {
-    case 'message.updated': {
-      const { info } = properties;
-      if (!info || info.sessionID !== state.activeSessionId) return;
-      if (info.role) state.roles[info.id] = info.role;
-      if (info.role === 'assistant' && info.time && info.time.completed) {
-        finalizeAssistantMessage(info.id, info.error?.data?.message || info.error?.message);
-      }
+  switch (event.type) {
+    case 'run.started': {
+      setWorking(true);
       break;
     }
-    case 'message.part.updated': {
-      const { part } = properties;
-      if (!part || part.sessionID !== state.activeSessionId) return;
-      if (state.roles[part.messageID] === 'user') return; // never echo the user
-      if (part.type !== 'text') return;
-      state.turn.textParts[part.id] = true;
-      // Snapshot carries the authoritative full text — replace any drift.
-      applyAssistantText(part.messageID, part.id, part.text || '', /*replace*/ true);
+    case 'text.delta': {
+      applyAssistantText(event.message_id, event.part_id, event.text || '', false);
       break;
     }
-    case 'message.part.delta': {
-      const { sessionID, messageID, partID, field, delta } = properties;
-      if (sessionID !== state.activeSessionId) return;
-      if (field !== 'text' || !delta) return;
-      if (state.roles[messageID] === 'user') return;
-      // Deltas fire for reasoning parts too — only stream known text parts.
-      if (!state.turn.textParts[partID]) return;
-      applyAssistantText(messageID, partID, delta, /*replace*/ false);
+    case 'text.snapshot': {
+      applyAssistantText(event.message_id, event.part_id, event.text || '', true);
       break;
     }
-    case 'session.status': {
-      const { sessionID, status } = properties;
-      if (sessionID !== state.activeSessionId) return;
-      setWorking(status?.type === 'busy');
+    case 'run.completed': {
+      finalizeAssistantMessage(event.message_id);
       break;
     }
-    case 'session.idle': {
-      const { sessionID } = properties;
-      if (sessionID && sessionID !== state.activeSessionId) return;
+    case 'approval.requested': {
+      const resource = event.metadata?.filepath
+        || (event.patterns || []).join(', ')
+        || event.permission
+        || 'this action';
+      const approved = window.confirm(`Allow this action once?\n\n${resource}`);
+      window.pywebview.api.reply_permission(
+        event.request_id,
+        approved ? 'once' : 'reject',
+      ).catch((error) => {
+        const msg = error?.message || String(error);
+        const el = createMessageBubble('assistant', `Approval failed: ${msg}`);
+        el.querySelector('.message-bubble')?.classList.add('error');
+      });
+      break;
+    }
+    case 'approval.resolved': {
+      break;
+    }
+    case 'run.idle': {
       setWorking(false);
+      if (state.sse) { state.sse.close(); state.sse = null; }
+      loadSessions();
       break;
     }
-    case 'session.error': {
-      const { sessionID, error } = properties;
-      if (sessionID && sessionID !== state.activeSessionId) return;
-      const msg = error?.data?.message || error?.message || 'Something went wrong';
+    case 'run.failed': {
+      const msg = event.message || 'Something went wrong';
       const liveId = Object.keys(state.turn.bubbles)[0];
       if (liveId) finalizeAssistantMessage(liveId, msg);
       else { const el = createMessageBubble('assistant', `⚠ ${msg}`); el.querySelector('.message-bubble')?.classList.add('error'); }
       setWorking(false);
-      break;
-    }
-    case 'session.updated': {
-      const { info } = properties;
-      if (info) updateSessionInList(info);
-      break;
-    }
-    case 'session.deleted': {
-      const { info } = properties;
-      if (!info) return;
-      state.sessions = state.sessions.filter(s => s.id !== info.id);
-      renderSessionList();
-      if (state.activeSessionId === info.id) {
-        state.activeSessionId = null;
-        clearMessages();
-      }
+      if (state.sse) { state.sse.close(); state.sse = null; }
       break;
     }
   }
@@ -355,7 +336,7 @@ function hideEmptyState() {
 // ── Session management ────────────────────────────────────────────────────────
 async function loadSessions() {
   try {
-    const sessions = await ocGet('/session');
+    const sessions = await bridge.listSessions();
     state.sessions = Array.isArray(sessions) ? sessions : [];
     renderSessionList();
   } catch (e) {
@@ -421,7 +402,7 @@ function newSession() {
 
 // Actually create the backend session (called on first message send).
 async function createBackendSession() {
-  const s = await ocPost('/session', {});
+  const s = await bridge.createSession();
   state.sessions.unshift(s);
   state.activeSessionId = s.id;
   renderSessionList();
@@ -449,7 +430,7 @@ async function activateSession(sessionId) {
   document.getElementById('chat-header').classList.remove('hidden');
 
   try {
-    const data = await ocGet(`/session/${sessionId}/message`);
+    const data = await bridge.sessionHistory(sessionId);
     if (Array.isArray(data)) renderHistoryMessages(data);
   } catch (e) {
     console.error('loadMessages:', e);
@@ -458,7 +439,7 @@ async function activateSession(sessionId) {
 
 async function deleteSession(sessionId) {
   try {
-    await ocDelete(`/session/${sessionId}`);
+    await bridge.deleteSession(sessionId);
     state.sessions = state.sessions.filter(s => s.id !== sessionId);
     renderSessionList();
     if (state.activeSessionId === sessionId) {
@@ -498,7 +479,7 @@ async function loadAgents() {
   // call fails, the config-supplied list (already shown by initAgents) stands.
   try {
     const declared = new Set((state.agents || []).map(a => a.name));
-    const live = await ocGet('/agent');
+    const live = await bridge.listAgents();
     if (!Array.isArray(live)) return;
     const visible = live
       .filter(a => declared.has(a.name))
@@ -560,14 +541,16 @@ async function sendMessage() {
     setWorking(true);       // optimistic; session.status will confirm/clear
     reconcileThinking();    // show the typing indicator immediately
 
-    await ocPost(`/session/${state.activeSessionId}/prompt_async`, {
-      agent: state.activeAgent || undefined,
-      model: state.activeModel
+    await connectSessionEvents(state.activeSessionId);
+    await bridge.sendMessage(
+      state.activeSessionId,
+      state.activeAgent || '',
+      state.activeModel
         ? { providerID: state.activeModel.providerID, modelID: state.activeModel.modelID }
-        : undefined,
-      parts: [{ type: 'text', text }],
-    });
-    // Response is rendered by SSE events; working state cleared on session.idle.
+        : null,
+      text,
+    );
+    // Response is rendered by normalized Spiritus events.
   } catch (e) {
     setWorking(false);
     const el = createMessageBubble('assistant', `⚠ ${e.message}`);
@@ -923,7 +906,6 @@ function reconnectAfterRestart() {
   if (state.sse) { state.sse.close(); state.sse = null; }
   state.settings.loaded = false; // force model picker to reload
   setTimeout(() => {
-    connectSSE();
     Promise.all([loadSessions(), loadAgents(), refreshVaultTree()]);
   }, 800);
 }
@@ -1092,7 +1074,6 @@ async function init() {
     return;
   }
 
-  connectSSE();
   await Promise.all([loadSessions(), loadAgents(), refreshVaultTree()]);
 }
 
