@@ -1,0 +1,522 @@
+"""
+UI Bridge — the JS↔Python API exposed via PyWebView.
+
+Generic plumbing only. Every method either:
+  - relays app-supplied configuration to the UI (get_config), or
+  - performs a generic operation (storage CRUD, provider auth, dialogs).
+
+The bridge holds an ``AppConfig`` but treats its domain fields as opaque data
+to forward — it never branches on what the app *is*.
+"""
+from __future__ import annotations
+
+import webview
+
+from . import agents as agents_mod
+from . import providers as providers_mod
+from . import storage
+from .integrations.browser_agent import SCRIPT as _BROWSER_AGENT
+from .config import AppConfig
+from .runtime import paths
+from .runtime.server import OpenCodeServer
+from .runtime.subproc import python_c
+
+
+class Bridge:
+    def __init__(self, config: AppConfig, server: OpenCodeServer):
+        self._config = config
+        self._server = server
+        self._project_root = paths.project_root(config.app_root, config.app_id)
+        self._workspace = paths.workspace_path(
+            config.app_root, config.app_id, config.workspace_dirname
+        )
+        # Ensure the app's declared folders exist (names come from the app).
+        storage.ensure_dirs(self._workspace, config.folder_names())
+
+    # ── Config ───────────────────────────────────────────────────────────────
+    def get_config(self) -> dict:
+        """Everything the UI needs, including app-supplied branding/taxonomy."""
+        return {
+            "opencode_port": self._server.port,
+            "workspace_path": str(self._workspace),
+            "project_path": str(self._project_root),
+            "app_title": self._config.app_title,
+            "app_id": self._config.app_id,
+            "workspace_folders": self._config.folders_payload(),
+            "agents": agents_mod.load_agents(self._project_root),
+            "default_model": agents_mod.default_model(self._project_root),
+            "default_agent": self._config.default_agent,
+            "default_capture_folder": self._config.default_capture_folder,
+        }
+
+    # ── Providers / Auth ───────────────────────────────────────────────────────
+    def get_providers(self) -> dict:
+        return providers_mod.list_providers(self._server.port)
+
+    def _restart_after(self, action) -> dict:
+        """Run a provider mutation, restart the engine, report the new port.
+
+        ``action`` returns a dict of extra fields to merge into the success
+        result (or None). Any exception becomes ``{"ok": False, "error": ...}``.
+        """
+        try:
+            extra = action() or {}
+            self._server.stop()
+            new_port = self._server.start()
+            return {"ok": True, "port": new_port, **extra}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def save_provider_key(self, provider_id: str, api_key: str) -> dict:
+        return self._restart_after(
+            lambda: providers_mod.save_key(self._server.home_dir, provider_id, api_key))
+
+    def remove_provider_key(self, provider_id: str) -> dict:
+        return self._restart_after(
+            lambda: providers_mod.remove_key(self._server.home_dir, provider_id))
+
+    def set_default_model(self, provider_id: str, model_id: str) -> dict:
+        return self._restart_after(lambda: {
+            "model": providers_mod.set_default_model(
+                self._project_root, provider_id, model_id)["model"],
+        })
+
+    # ── Workspace / Storage ─────────────────────────────────────────────────────
+    def workspace_tree(self) -> dict:
+        """Folder tree with counts. Folder list is app-defined; Core just counts."""
+        tree = {}
+        for f in self._config.workspace_folders:
+            tree[f.name] = {
+                "count": storage.count_dir(self._workspace, f.name),
+                "path": f.name,
+                "icon": f.icon,
+                "label": f.display(),
+            }
+        return tree
+
+    def workspace_list(self, folder: str = "") -> list:
+        return storage.list_dir(self._workspace, folder)
+
+    def workspace_read(self, rel_path: str) -> dict:
+        return storage.read(self._workspace, rel_path)
+
+    def workspace_write(self, rel_path: str, content: str) -> dict:
+        return storage.write(self._workspace, rel_path, content)
+
+    def workspace_delete(self, rel_path: str) -> dict:
+        return storage.delete(self._workspace, rel_path)
+
+    def workspace_new_note_path(self, title: str = "") -> str:
+        folder = self._config.default_capture_folder or ""
+        return storage.timestamped_name(folder, title) if folder else ""
+
+    # ── Dialogs ──────────────────────────────────────────────────────────────
+    def open_folder_dialog(self) -> str:
+        """Ask the user for a folder and return its path ("" if cancelled).
+
+        Runs the picker in a short-lived subprocess rather than through
+        ``window.create_file_dialog``. pywebview marshals almost every GUI call
+        onto the toolkit thread via Invoke(), but *not* create_file_dialog — so
+        when a bridge call arrives on one of the UI server's worker threads (as
+        all of them do), the Windows folder dialog is constructed off the GUI
+        thread and silently never appears. A separate process owns its own main
+        thread, which sidesteps that entirely and behaves the same on macOS.
+        """
+        import subprocess
+
+        script = (
+            "import tkinter as tk\n"
+            "from tkinter import filedialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "root.attributes('-topmost', True)\n"
+            "path = filedialog.askdirectory(title='Choose a folder')\n"
+            "root.destroy()\n"
+            "print(path or '')\n"
+        )
+        try:
+            result = subprocess.run(
+                python_c(script),
+                capture_output=True, text=True, timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return ""
+        except Exception:
+            return ""
+        if result.returncode != 0:
+            return ""
+        return (result.stdout or "").strip()
+
+    def open_file_dialog(self) -> list[str]:
+        result = webview.windows[0].create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=True,
+        )
+        if not result:
+            return []
+        return list(result) if isinstance(result, (list, tuple)) else [result]
+
+    # ── Application browser ───────────────────────────────────────────────────
+    def open_external(self, url: str) -> dict:
+        target = str(url or "").strip()
+        if not target:
+            return {"ok": False, "error": "No URL provided"}
+        try:
+            import webbrowser
+
+            webbrowser.open(target, new=2)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def browser_open(self, url: str) -> dict:
+        """Launch a headed Playwright Chromium browser at the given URL.
+        Leaves the app window untouched and returns {ok, port} for the local
+        HTTP control API. The browser opens at its platform default size.
+        """
+        import json
+        import subprocess
+
+        self._browser_close_internal()
+
+        # Register atexit once so a clean app exit also kills the browser.
+        if not getattr(self, "_browser_atexit_registered", False):
+            import atexit
+            atexit.register(self._browser_close_internal)
+            self._browser_atexit_registered = True
+
+        # Launch the browser in its own process at the platform default size.
+        try:
+            profile_dir = str(self._workspace / "browser-profile")
+            proc = subprocess.Popen(
+                python_c(_BROWSER_AGENT, url, profile_dir),
+                stdin=subprocess.PIPE,   # agent watches stdin; EOF → agent exits
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            line = proc.stdout.readline()
+            if not line:
+                err = proc.stderr.read(500)
+                return {"ok": False, "error": err or "browser agent failed to start"}
+            info = json.loads(line.strip())
+            if not info.get("ok"):
+                proc.terminate()
+                return info
+            self._browser_proc = proc
+            self._browser_port = info["port"]
+            # Watch for subprocess exit so the UI is notified immediately
+            # rather than waiting for the health poll.
+            import threading
+            threading.Thread(
+                target=self._watch_browser_exit,
+                args=(proc,),
+                daemon=True,
+            ).start()
+            return {"ok": True, "port": info["port"]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def browser_close(self) -> dict:
+        return self._browser_close_internal()
+
+    def browser_detect_fields(self) -> dict:
+        """Scan the active page for HTML form fields and return structured data."""
+        port = getattr(self, "_browser_port", None)
+        if not port:
+            return {"ok": False, "error": "Browser not open"}
+        try:
+            import json as _json
+            import urllib.request
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/detect-fields",
+                method="POST",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return _json.loads(resp.read().decode())
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def browser_scrape(self, url: str) -> dict:
+        """Deterministically fetch a page's visible text for downstream extraction.
+
+        Returns {ok, url, title, text}. If the headed application browser is
+        already running, route the scrape through it (one Chrome per profile
+        dir is the OS limit) using a throwaway tab. Otherwise launch a dedicated
+        headless Chromium with the same persistent profile so logged-in pages
+        resolve — modeled on the export_pdf subprocess.
+        """
+        url = (url or "").strip()
+        if not url:
+            return {"ok": False, "error": "No URL provided"}
+
+        # ── Reuse the running headed browser if one is open ───────────────────
+        port = getattr(self, "_browser_port", None)
+        if port:
+            try:
+                import json as _json
+                import urllib.request
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/scrape",
+                    method="POST",
+                    data=_json.dumps({"url": url}).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=40) as resp:
+                    return _json.loads(resp.read().decode())
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        # ── Otherwise scrape headless with the persistent profile ─────────────
+        import json as _json
+        import subprocess
+        profile_dir = str(self._workspace / "browser-profile")
+        script = (
+            "import sys, json, pathlib, os, shutil\n"
+            "from playwright.sync_api import sync_playwright\n"
+            "url, user_dir = sys.argv[1], sys.argv[2]\n"
+            "def _system_chrome_available():\n"
+            "    names = ['google-chrome', 'google-chrome-stable', 'chrome']\n"
+            "    if sys.platform == 'win32':\n"
+            "        local = os.environ.get('LOCALAPPDATA', '')\n"
+            "        pf = os.environ.get('PROGRAMFILES', '')\n"
+            "        pf86 = os.environ.get('PROGRAMFILES(X86)', '')\n"
+            "        paths = [os.path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe'), os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'), os.path.join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe')]\n"
+            "        return any(os.path.isfile(p) for p in paths) or bool(shutil.which('chrome.exe'))\n"
+            "    if sys.platform == 'darwin':\n"
+            "        paths = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', os.path.expanduser('~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')]\n"
+            "        return any(os.path.isfile(p) for p in paths)\n"
+            "    return any(shutil.which(name) for name in names)\n"
+            "_browser_channel = 'chrome' if _system_chrome_available() else None\n"
+            "lock = pathlib.Path(user_dir) / 'SingletonLock'\n"
+            "try:\n"
+            "    if lock.exists() or lock.is_symlink(): lock.unlink()\n"
+            "except Exception: pass\n"
+            "pathlib.Path(user_dir).mkdir(parents=True, exist_ok=True)\n"
+            "with sync_playwright() as pw:\n"
+            "    ctx = pw.chromium.launch_persistent_context(\n"
+            "        user_dir, headless=True, channel=_browser_channel,\n"
+            "        args=['--disable-blink-features=AutomationControlled'])\n"
+            "    page = ctx.pages[0] if ctx.pages else ctx.new_page()\n"
+            "    try:\n"
+            "        page.goto(url, wait_until='domcontentloaded', timeout=25000)\n"
+            "        try: page.wait_for_timeout(1200)\n"
+            "        except Exception: pass\n"
+            "        title = ''\n"
+            "        try: title = page.title()\n"
+            "        except Exception: pass\n"
+            "        text = page.evaluate('() => document.body ? document.body.innerText : \"\"')\n"
+            "        print(json.dumps({'ok': True, 'url': page.url, 'title': title, 'text': text or ''}))\n"
+            "    finally:\n"
+            "        ctx.close()\n"
+        )
+        try:
+            result = subprocess.run(
+                python_c(script, url, profile_dir),
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Scrape timed out (>60s)"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "scrape failed").strip()
+            return {"ok": False, "error": err[-400:]}
+        # The script prints one JSON line; tolerate any preceding stdout noise.
+        lines = [ln for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return {"ok": False, "error": "Scrape produced no output"}
+        try:
+            return _json.loads(lines[-1])
+        except Exception as e:
+            return {"ok": False, "error": f"Could not parse scrape output: {e}"}
+
+    def browser_get_profile_status(self) -> dict:
+        """Return whether a validated browser profile exists, plus account metadata."""
+        meta_path = self._workspace / "browser-profile" / "profile-meta.json"
+        if meta_path.exists():
+            try:
+                import json as _json
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                return {
+                    "exists": True,
+                    "google_email": meta.get("google_email"),
+                    "setup_date": meta.get("setup_date"),
+                }
+            except Exception:
+                pass
+        return {"exists": False}
+
+    def browser_setup_profile(self) -> dict:
+        """Open a headed Chromium with persistent context at Google sign-in."""
+        (self._workspace / "browser-profile").mkdir(parents=True, exist_ok=True)
+        return self.browser_open("https://accounts.google.com")
+
+    def browser_check_google_login(self) -> dict:
+        """Verify Google session cookies exist and extract the account email.
+        On success, writes profile-meta.json so the profile is marked as set up."""
+        import json as _json
+        import urllib.request
+        port = getattr(self, "_browser_port", None)
+        if not port:
+            return {"ok": False, "error": "Browser not open"}
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/check-google-login",
+                method="POST",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                result = _json.loads(resp.read().decode())
+            if result.get("ok") and result.get("logged_in"):
+                import datetime
+                meta = {
+                    "google_email": result.get("email"),
+                    "setup_date": datetime.date.today().isoformat(),
+                }
+                meta_path = self._workspace / "browser-profile" / "profile-meta.json"
+                meta_path.write_text(_json.dumps(meta, indent=2), encoding="utf-8")
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def browser_reset_profile(self) -> dict:
+        """Delete all browser profile data (saved sessions, cookies, logins)."""
+        import shutil
+        self._browser_close_internal()
+        profile_dir = self._workspace / "browser-profile"
+        if profile_dir.exists():
+            try:
+                shutil.rmtree(profile_dir)
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        (profile_dir / ".gitkeep").touch()
+        return {"ok": True}
+
+    def _browser_close_internal(self) -> dict:
+        proc = getattr(self, "_browser_proc", None)
+        port = getattr(self, "_browser_port", None)
+        if proc:
+            if port:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/stop",
+                        method="POST",
+                        data=b"{}",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    urllib.request.urlopen(req, timeout=2)
+                except Exception:
+                    pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+            self._browser_proc = None
+            self._browser_port = None
+        return {"ok": True}
+
+    def _watch_browser_exit(self, proc) -> None:
+        """Block until the browser agent subprocess exits and notify the UI."""
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        # Notify JS so the UI re-renders (shows "Open Application" button, etc.).
+        try:
+            if webview.windows:
+                webview.windows[0].evaluate_js(
+                    'typeof _onBrowserProcessDied === "function" && _onBrowserProcessDied()'
+                )
+        except Exception:
+            pass
+
+    # ── Export ───────────────────────────────────────────────────────────────
+    def export_pdf(self, html: str, filename: str, out_dir: str = "") -> dict:
+        """Render HTML to a PDF via Playwright/Chromium and save it to disk.
+
+        Writes to ``out_dir`` when given (the caller having picked a folder via
+        ``open_folder_dialog``), otherwise to the platform's Downloads folder.
+        ``pathlib`` and pywebview's folder dialog are both cross-platform, so no
+        per-OS branching is needed here.
+
+        Runs Playwright in a subprocess to avoid greenlet/pywebview thread
+        conflicts."""
+        import os
+        import pathlib
+        import subprocess
+        import tempfile
+
+        if out_dir:
+            target = pathlib.Path(out_dir).expanduser()
+            if not target.is_dir():
+                return {"ok": False, "error": f"Folder not found: {target}"}
+        else:
+            target = pathlib.Path.home() / "Downloads"
+            target.mkdir(parents=True, exist_ok=True)
+
+        # Strip any path separators a caller may have put in the filename so the
+        # chosen folder is always where the file lands.
+        path = target / pathlib.Path(filename).name
+
+        stem, suffix = path.stem, path.suffix
+        i = 1
+        while path.exists():
+            path = target / f"{stem}_{i}{suffix}"
+            i += 1
+
+        # Write HTML to a temp file so the subprocess can read it cleanly
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".html", delete=False, mode="w", encoding="utf-8"
+            )
+            tmp.write(html)
+            tmp.close()
+        except Exception as e:
+            return {"ok": False, "error": f"failed to write temp file: {e}"}
+
+        # Playwright runs in a subprocess — avoids conflicts with pywebview's
+        # internal thread/greenlet model that cause sync_playwright() to hang.
+        script = (
+            "from playwright.sync_api import sync_playwright\n"
+            f"html_path = {repr(tmp.name)}\n"
+            f"pdf_path  = {repr(str(path))}\n"
+            "with sync_playwright() as pw:\n"
+            "    b = pw.chromium.launch()\n"
+            "    p = b.new_page()\n"
+            "    p.set_content(open(html_path, encoding='utf-8').read(), wait_until='domcontentloaded')\n"
+            "    p.pdf(path=pdf_path, format='Letter',\n"
+            "          margin={'top':'0','right':'0','bottom':'0','left':'0'},\n"
+            "          print_background=True)\n"
+            "    b.close()\n"
+        )
+
+        try:
+            result = subprocess.run(
+                python_c(script),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "PDF generation timed out (>60s)"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "unknown error").strip()
+            return {"ok": False, "error": err[-400:]}
+
+        return {"ok": True, "path": str(path), "filename": path.name}

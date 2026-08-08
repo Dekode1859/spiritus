@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" class="sl-theme-dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spiritus</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.19.1/cdn/themes/dark.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── Sidebar ──────────────────────────────────────────── -->
+  <aside id="sidebar">
+
+    <div id="sidebar-header">
+      <div class="brand">
+        <sl-icon library="lucide" name="box"></sl-icon>
+        <span>Spiritus</span>
+      </div>
+      <sl-tooltip content="New session" placement="right">
+        <sl-icon-button id="btn-new-session" library="lucide" name="square-pen" label="New session"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+
+    <div id="sessions-section">
+      <div class="section-label">Sessions</div>
+      <div id="session-list">
+        <div class="empty-hint">No sessions yet. Click + to start.</div>
+      </div>
+    </div>
+
+    <div id="vault-section">
+      <div class="section-label">Vault</div>
+      <div id="vault-folders"></div>
+    </div>
+
+    <div id="sidebar-footer">
+      <sl-tooltip content="Provider &amp; model settings" placement="right">
+        <sl-icon-button id="btn-settings" library="lucide" name="settings-2" label="Settings"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+
+  </aside>
+
+  <!-- ── Chat area ──────────────────────────────────────────── -->
+  <main id="chat-area">
+
+    <div id="chat-header" class="hidden">
+      <sl-icon library="lucide" name="message-square"></sl-icon>
+      <span id="chat-session-title">New session</span>
+    </div>
+
+    <div id="messages-wrap">
+      <div id="messages">
+        <div id="empty-state">
+          <sl-icon library="lucide" name="box" class="empty-icon"></sl-icon>
+          <div class="empty-title">Spiritus</div>
+          <div class="empty-sub">Pick an agent below and start a session.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Input zone ─────────────────────────────────────── -->
+    <div id="input-zone">
+      <div id="input-box">
+
+        <textarea id="chat-input" rows="1"
+          placeholder="Ask anything… Shift+Enter for newline, Enter to send"
+        ></textarea>
+
+        <div id="input-footer">
+
+          <div id="input-footer-left">
+
+            <!-- Agent dropdown -->
+            <sl-dropdown id="agent-dropdown" placement="top-start" distance="6">
+              <button slot="trigger" class="chip-btn" id="agent-trigger-btn">
+                <sl-icon library="lucide" name="bot"></sl-icon>
+                <span id="agent-label">Agent</span>
+                <sl-icon library="lucide" name="chevrons-up-down" class="chip-caret"></sl-icon>
+              </button>
+              <sl-menu id="agent-menu">
+                <!-- hidden placeholder forces Shoelace autoloader to register sl-menu-item -->
+                <sl-menu-item style="display:none" aria-hidden="true"></sl-menu-item>
+              </sl-menu>
+            </sl-dropdown>
+
+            <!-- Model dropdown -->
+            <sl-dropdown id="model-dropdown" placement="top-start" distance="6">
+              <button slot="trigger" class="chip-btn chip-btn--secondary" id="btn-model-chip">
+                <sl-icon library="lucide" name="cpu"></sl-icon>
+                <span id="model-label">Select model</span>
+                <sl-icon library="lucide" name="chevrons-up-down" class="chip-caret"></sl-icon>
+              </button>
+              <div class="model-picker-panel">
+                <div class="model-picker-header">
+                  <div class="model-search-wrap">
+                    <sl-icon library="lucide" name="search" class="model-search-icon"></sl-icon>
+                    <input id="model-search" type="text" placeholder="Search models" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="model-picker-actions">
+                    <button class="mpick-icon-btn" id="btn-mpick-settings" title="Provider settings">
+                      <sl-icon library="lucide" name="settings-2"></sl-icon>
+                    </button>
+                  </div>
+                </div>
+                <div id="model-list-wrap"></div>
+              </div>
+            </sl-dropdown>
+
+          </div>
+
+          <div id="input-footer-right">
+            <div id="streaming-indicator" class="hidden">
+              <sl-spinner></sl-spinner>
+              <span id="streaming-status-text">Working…</span>
+            </div>
+            <button id="btn-send" class="send-btn" disabled aria-label="Send">
+              <sl-icon library="lucide" name="arrow-up"></sl-icon>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Vault dialog ──────────────────────────────────────────── -->
+<sl-dialog id="vault-dialog" label="Vault" style="--width:520px">
+  <div id="vault-dialog-inner">
+    <div id="vault-dialog-files"></div>
+    <pre id="vault-dialog-content" class="hidden"></pre>
+  </div>
+</sl-dialog>
+
+<!-- ── Settings dialog ──────────────────────────────────────── -->
+<sl-dialog id="settings-dialog" label="Provider Settings" style="--width:500px">
+
+  <div class="dlg-section">
+    <div class="dlg-section-label">Connected Providers</div>
+    <div id="connected-providers-list"><span class="hint-text">Loading…</span></div>
+  </div>
+
+  <sl-divider style="--spacing:1rem"></sl-divider>
+
+  <div class="dlg-section">
+    <div class="dlg-section-label">Add or Update API Key</div>
+    <div class="dlg-fields">
+      <sl-select id="settings-provider-select" label="Provider" size="small" hoist clearable></sl-select>
+      <sl-input id="settings-api-key" label="API Key" type="password" size="small"
+        placeholder="Paste your key here…" password-toggle clearable>
+      </sl-input>
+      <div id="settings-auth-status" class="status-text"></div>
+      <sl-button id="btn-save-provider" variant="primary" size="small">
+        <sl-icon slot="prefix" library="lucide" name="key-round"></sl-icon>
+        Save &amp; Reconnect
+      </sl-button>
+    </div>
+  </div>
+
+  <sl-divider style="--spacing:1rem"></sl-divider>
+
+  <div class="dlg-section">
+    <div class="dlg-section-label">Default Model</div>
+    <div class="dlg-fields">
+      <sl-select id="settings-model-provider" label="Provider" size="small" hoist>
+        <sl-option value="">— pick a connected provider —</sl-option>
+      </sl-select>
+      <sl-select id="settings-model-select" label="Model" size="small" hoist disabled>
+        <sl-option value="">— pick a provider first —</sl-option>
+      </sl-select>
+      <div id="settings-model-status" class="status-text"></div>
+      <sl-button id="btn-save-model" variant="primary" size="small" disabled>
+        <sl-icon slot="prefix" library="lucide" name="check"></sl-icon>
+        Set Default Model &amp; Restart
+      </sl-button>
+    </div>
+  </div>
+
+  <div slot="footer">
+    <sl-button id="btn-settings-close" size="small">Close</sl-button>
+  </div>
+
+</sl-dialog>
+
+<!-- ── Toast ──────────────────────────────────────────────────── -->
+<div id="toast" class="hidden"></div>
+
+<!-- Lucide icon library for Shoelace -->
+<script type="module">
+import { registerIconLibrary } from 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.19.1/cdn/utilities/icon-library.js';
+registerIconLibrary('lucide', {
+  resolver: name => `https://cdn.jsdelivr.net/npm/lucide-static@0.441.0/icons/${name}.svg`,
+  mutator: svg => svg.setAttribute('stroke', 'currentColor'),
+});
+</script>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.19.1/cdn/shoelace-autoloader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>

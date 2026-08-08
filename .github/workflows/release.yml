@@ -1,0 +1,139 @@
+name: Release
+
+# Two ways in, one path out.
+#
+# Normal flow: a change lands on main. If pyproject.toml declares a version
+# that has no tag yet, this tags it and publishes. If the version is unchanged —
+# a docs fix, a test tweak — nothing happens. The version bump *is* the release
+# request, made in the same pull request as the change it describes.
+#
+# Escape hatch: pushing a v* tag by hand, or dispatching manually, releases that
+# version directly.
+#
+# Tagging and publishing are one job on purpose. A tag pushed with GITHUB_TOKEN
+# does not trigger other workflows, so a split "tag here, release there" design
+# would silently never publish.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # tags, so we can tell what is already released
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Work out what, if anything, to release
+        id: plan
+        run: |
+          # Both read from pyproject, so a rename of either cannot desync them.
+          # DIST is the filename form of project.name: PEP 427 normalization,
+          # which is what uv build stamps on the artifacts (spiritus ->
+          # spiritus).
+          VERSION=$(python -c "import tomllib,pathlib; \
+            print(tomllib.loads(pathlib.Path('pyproject.toml') \
+            .read_text())['project']['version'])")
+          DIST=$(python -c "import tomllib,pathlib,re; \
+            print(re.sub(r'[-_.]+', '_', tomllib.loads(pathlib.Path('pyproject.toml') \
+            .read_text())['project']['name']).lower())")
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist=$DIST"       >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            # Released by tag: the tag must agree with the package, or the
+            # artifact filenames would contradict the release name.
+            if [ "${{ github.ref_name }}" != "$TAG" ]; then
+              echo "::error::Tag ${{ github.ref_name }} does not match project.version in pyproject.toml ($VERSION)."
+              exit 1
+            fi
+            echo "release=true"   >> "$GITHUB_OUTPUT"
+            echo "needs_tag=false" >> "$GITHUB_OUTPUT"
+            echo "Releasing $TAG (tag push)."
+          elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "release=false"  >> "$GITHUB_OUTPUT"
+            echo "needs_tag=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG already exists — version unchanged, nothing to release."
+          else
+            echo "release=true"   >> "$GITHUB_OUTPUT"
+            echo "needs_tag=true" >> "$GITHUB_OUTPUT"
+            echo "Version bumped to $VERSION with no $TAG — releasing."
+          fi
+
+      - name: Install
+        if: steps.plan.outputs.release == 'true'
+        run: uv sync --group dev --group apps
+
+      - name: Verify before publishing
+        # Never publish a red commit. Same gate as CI: Core plus the swap
+        # invariant, which loads both frozen apps against this Core.
+        if: steps.plan.outputs.release == 'true'
+        run: |
+          uv run ruff check .
+          uv run pytest tests -q -m "not frozen_app"
+
+      - name: Build
+        if: steps.plan.outputs.release == 'true'
+        run: uv build
+
+      - name: Check the artifacts carry the version being released
+        # Guards against publishing a release whose assets say something other
+        # than the tag. On a mismatch, show what was actually built — the names
+        # are the whole diagnosis.
+        if: steps.plan.outputs.release == 'true'
+        run: |
+          V="${{ steps.plan.outputs.version }}"
+          D="${{ steps.plan.outputs.dist }}"
+          for f in "dist/$D-$V-py3-none-any.whl" "dist/$D-$V.tar.gz"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Expected $f — uv build produced:"
+              ls -1 dist/
+              exit 1
+            fi
+          done
+          echo "Artifacts match $D $V."
+
+      - name: Create the tag
+        if: steps.plan.outputs.needs_tag == 'true'
+        run: |
+          git config user.name  "Dekode1859"
+          git config user.email "prateekdwivedi30@gmail.com"
+          git tag -a "${{ steps.plan.outputs.tag }}" \
+            -m "spiritus ${{ steps.plan.outputs.version }}"
+          git push origin "${{ steps.plan.outputs.tag }}"
+
+      - name: Publish release
+        if: steps.plan.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.plan.outputs.tag }}
+          name: spiritus ${{ steps.plan.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.plan.outputs.release }}" = "true" ]; then
+            echo "Released ${{ steps.plan.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No release: ${{ steps.plan.outputs.tag }} already exists." >> "$GITHUB_STEP_SUMMARY"
+          fi

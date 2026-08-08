@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --group dev
+      - name: ruff check
+        run: uv run ruff check .
+
+  test:
+    name: Test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        # `apps` brings the frozen example apps' dependencies. They are needed
+        # to *import* those apps, which the swap-invariant suite does on every
+        # run; without them half that baseline silently skips and a Core change
+        # could break real apps without CI noticing.
+        run: uv sync --group dev --group apps --python ${{ matrix.python }}
+      - name: Run tests
+        # Core and the boundary. `frozen_app` suites characterize the internals
+        # of an app that is no longer developed — a filesystem pipeline with a
+        # background thread, platform-sensitive and irrelevant to what the
+        # package promises. They still run locally via `pytest tests`.
+        run: uv run pytest tests -q -m "not frozen_app"
+      - name: The swap invariant must actually have run, not skipped
+        # A skipped baseline is worse than no baseline: it reads as green.
+        # Explicit bash: windows-latest defaults `run:` to PowerShell, where
+        # this script is not merely unportable but a syntax error.
+        shell: bash
+        run: |
+          uv run pytest tests/test_swap_invariant.py -q --no-header -rs 2>&1 | tee swap.txt
+          if grep -qi "skipped" swap.txt; then
+            echo "::error::Swap invariant tests skipped — the frozen apps were not exercised"
+            exit 1
+          fi
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build wheel and sdist
+        run: uv build
+      - name: Verify the wheel ships its package data
+        # runtime/paths.resource_path resolves ui/ relative to the package dir,
+        # so a wheel missing those assets installs fine and fails at runtime.
+        run: |
+          python - <<'PY'
+          import zipfile, glob, sys
+          whl = glob.glob("dist/*.whl")[0]
+          names = set(zipfile.ZipFile(whl).namelist())
+          required = {
+              "spiritus/__init__.py",
+              "spiritus/config.py",
+              "spiritus/ui/index.html",
+              "spiritus/ui/app.js",
+              "spiritus/ui/style.css",
+          }
+          missing = required - names
+          assert not missing, f"wheel is missing {missing}"
+          leaked = [n for n in names if "__pycache__" in n or n.endswith(".pyc")]
+          assert not leaked, f"wheel contains build junk: {leaked[:5]}"
+          print(f"{whl}: {len(names)} entries, package data present")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  install-from-git:
+    name: Install from git URL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install this commit as a consumer would
+        # Proves the documented install path works against the actual ref,
+        # including that package data lands inside site-packages.
+        run: |
+          uv venv consumer
+          uv pip install --python consumer/bin/python \
+            "spiritus @ git+${{ github.server_url }}/${{ github.repository }}@${{ github.sha }}"
+      - name: Smoke-test the installed package
+        # Must run from outside the checkout. With the repo as cwd, `import
+        # spiritus` resolves to ./spiritus/ (the source tree) rather than the
+        # installed package, and this job would verify nothing.
+        working-directory: /tmp
+        run: |
+          "$GITHUB_WORKSPACE/consumer/bin/python" - <<'PY'
+          import inspect
+          from pathlib import Path
+          import spiritus
+          from spiritus import run, AppConfig, WorkspaceFolder
+          from spiritus.runtime.paths import resource_path
+
+          pkg = Path(inspect.getfile(spiritus)).parent
+          assert "site-packages" in str(pkg), pkg
+          ui = resource_path("ui")
+          assert ui.is_dir() and (ui / "index.html").exists(), ui
+
+          cfg = AppConfig(
+              app_id="ci-smoke", app_title="CI Smoke", app_root=Path.cwd(),
+              workspace_folders=(WorkspaceFolder("inbox", "inbox", "Inbox"),),
+          )
+          assert cfg.folder_names() == ["inbox"]
+          assert callable(run)
+          print("installed from git:", spiritus.__version__, "at", pkg)
+          PY
+      - name: The engine CLI must work from a bare install
+        # Resolution and reporting only — install-engine would pull ~60 MB.
+        # A missing engine must exit non-zero with the fix in the message.
+        # Outside the checkout, for the same shadowing reason as above.
+        working-directory: /tmp
+        run: |
+          SPIRITUS="$GITHUB_WORKSPACE/consumer/bin/spiritus"
+          "$SPIRITUS" --version
+          "$SPIRITUS" engine-info || true
+          if "$SPIRITUS" engine-path; then
+            echo "::error::engine-path succeeded on a runner with no engine"
+            exit 1
+          fi
+          "$SPIRITUS" engine-path 2>&1 | grep -q "install-engine"
+          echo "engine CLI reports a missing engine correctly"

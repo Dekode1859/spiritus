@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# Spiritus is both the distribution name and the import package name.
+name = "spiritus"
+version = "0.3.0"
+description = "A deterministic runtime for AI workflow apps — generic Core, zero domain knowledge"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Dekode1859", email = "prateekdwivedi30@gmail.com" }]
+keywords = ["agents", "runtime", "desktop", "llm", "opencode", "pywebview"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "pywebview>=4.4.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+# Provisioning only — Spiritus runs apps, it is not a CLI tool. This exists so
+# the execution engine can be installed explicitly rather than downloaded
+# implicitly at first launch.
+spiritus = "spiritus.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Dekode1859/Spiritus"
+Repository = "https://github.com/Dekode1859/Spiritus"
+Issues = "https://github.com/Dekode1859/Spiritus/issues"
+Changelog = "https://github.com/Dekode1859/Spiritus/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+# NOT Core dependencies. These belong to the frozen example apps under apps/,
+# and exist here only so tests/test_swap_invariant.py can load those apps as a
+# baseline: if a Core change stops them running, the swap invariant broke.
+# Without these installed the learning-os half of that baseline silently skips.
+apps = [
+    "beautifulsoup4>=4.12.0",
+    "ebooklib>=0.18",
+    "markdownify>=0.13.0",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["spiritus"]
+
+[tool.hatch.build.targets.sdist]
+include = ["spiritus", "tests", "README.md", "LICENSE", "CHANGELOG.md"]
+
+# ui/ (app.js, index.html, style.css) and the module READMEs ship as package
+# data — runtime/paths.py resolves them relative to the package dir, so they
+# must land inside the installed package, not beside it.
+[tool.hatch.build]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.DS_Store",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "frozen_app: characterizes a frozen example app's own internals, not Core. Applied automatically by tests/conftest.py. Excluded from the CI gate (`-m 'not frozen_app'`) because it tests an app that is no longer developed; the swap-invariant suite still loads those apps on every run.",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["apps/*/.venv", "apps/*/.opencode-home", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = [
+    "E501",  # long lines: prose docstrings and embedded JS payloads
+    "B008",  # function call in default arg — not a pattern used here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Apps deliberately mutate sys.path before importing spiritus (monorepo layout),
+# which forces module-level imports below statements.
+"apps/*/main.py" = ["E402"]
+"apps/*/app_bridge.py" = ["E402"]
+"tests/*" = ["E402"]
