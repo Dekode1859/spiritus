@@ -1,10 +1,10 @@
 """
-Core storage layer — generic file primitives only.
+Generic storage primitives for Spiritus applications.
 
-Per the runtime spec (§7), Core storage has **no knowledge of folder
-semantics**. It exposes read/write/list/delete over a root directory with
-path-traversal protection. *Which* folders exist and what they *mean* is an
-application concern, supplied at call time — never hardcoded here.
+Storage has **no knowledge of folder semantics**. It exposes
+read/write/list/delete over a root directory with path-traversal protection.
+Which folders exist and what they mean is an application concern, supplied at
+call time — never hardcoded here.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _safe(root: Path, rel: str) -> Path:
 def ensure_dirs(root: Path, names: list[str]) -> Path:
     """Ensure the given subdirectories exist under ``root``.
 
-    ``names`` is supplied by the application; Core does not invent any.
+    ``names`` is supplied by the application; Spiritus does not invent any.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -106,7 +106,7 @@ def delete(root: Path, rel: str) -> dict:
 def timestamped_name(folder: str, title: str = "") -> str:
     """Build a timestamped relative path inside ``folder``.
 
-    ``folder`` is provided by the caller (the app); Core picks no default.
+    ``folder`` is provided by the caller; Spiritus picks no default.
     """
     ts = time.strftime("%Y-%m-%d_%H%M%S")
     slug = title.lower().replace(" ", "-")[:40] if title else "note"

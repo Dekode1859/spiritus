@@ -1,10 +1,10 @@
 """
-Agent system (Core side) — generic loading only.
+Agent configuration access for the Spiritus runtime.
 
-Agents are **not implemented in Core** (runtime spec §8). OpenCode executes the
-agent definitions declared in the application's ``opencode.json``. This module
-just reads those declarations so the UI can present them (names, labels,
-default model). It contains no agent prompts or logic — those are the app's.
+OpenCode executes the agent definitions declared in the application's
+``opencode.json``. This module reads those declarations so the UI and future
+Spiritus agent APIs can present them. Prompts and product behavior remain with
+the consuming application.
 """
 from __future__ import annotations
 
@@ -17,10 +17,10 @@ def _titleize(name: str) -> str:
 
 
 def load_agents(project_root: Path) -> list[dict]:
-    """Read agent definitions from the app's opencode.json.
+    """Read agent definitions from the application's opencode.json.
 
     Returns ``[{name, label, description}]``. If the file is missing/invalid,
-    returns an empty list — Core never fabricates agents.
+    returns an empty list.
     """
     oc_path = Path(project_root) / "opencode.json"
     try:
@@ -40,7 +40,7 @@ def load_agents(project_root: Path) -> list[dict]:
 
 
 def default_model(project_root: Path) -> str:
-    """Return the app's configured default model string, or ''."""
+    """Return the application's configured default model string, or ''."""
     oc_path = Path(project_root) / "opencode.json"
     try:
         return json.loads(oc_path.read_text(encoding="utf-8")).get("model", "")

@@ -40,28 +40,9 @@ jobs:
         with:
           enable-cache: true
       - name: Install
-        # `apps` brings the frozen example apps' dependencies. They are needed
-        # to *import* those apps, which the swap-invariant suite does on every
-        # run; without them half that baseline silently skips and a Core change
-        # could break real apps without CI noticing.
-        run: uv sync --group dev --group apps --python ${{ matrix.python }}
+        run: uv sync --group dev --python ${{ matrix.python }}
       - name: Run tests
-        # Core and the boundary. `frozen_app` suites characterize the internals
-        # of an app that is no longer developed — a filesystem pipeline with a
-        # background thread, platform-sensitive and irrelevant to what the
-        # package promises. They still run locally via `pytest tests`.
-        run: uv run pytest tests -q -m "not frozen_app"
-      - name: The swap invariant must actually have run, not skipped
-        # A skipped baseline is worse than no baseline: it reads as green.
-        # Explicit bash: windows-latest defaults `run:` to PowerShell, where
-        # this script is not merely unportable but a syntax error.
-        shell: bash
-        run: |
-          uv run pytest tests/test_swap_invariant.py -q --no-header -rs 2>&1 | tee swap.txt
-          if grep -qi "skipped" swap.txt; then
-            echo "::error::Swap invariant tests skipped — the frozen apps were not exercised"
-            exit 1
-          fi
+        run: uv run pytest tests -q
 
   build:
     name: Build distributions

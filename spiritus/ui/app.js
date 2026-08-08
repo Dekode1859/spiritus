@@ -473,7 +473,7 @@ async function deleteSession(sessionId) {
 
 // ── Agent management ──────────────────────────────────────────────────────────
 // The agent list is supplied entirely by the application via get_config
-// (derived from its opencode.json). Core has no built-in or default agents.
+// (derived from its opencode.json). Spiritus has no built-in or default agents.
 
 function buildMenuItems(agents) {
   return agents.map(a => {
@@ -592,7 +592,7 @@ function renderVaultFolders(tree) {
   const el = document.getElementById('vault-folders');
   el.innerHTML = '';
   // Icons + labels come from the app's config (relayed through workspace_tree).
-  // Core knows no folder names.
+  // Spiritus knows no folder names.
   for (const [name, info] of Object.entries(tree)) {
     const div = document.createElement('div');
     div.className = 'vault-folder-item' + (state.vault.folder === name ? ' active' : '');
@@ -1044,7 +1044,7 @@ function wireEvents() {
 async function init() {
   wireEvents();
 
-  // Wait for pywebview bridge and core Shoelace components.
+  // Wait for pywebview bridge and the Spiritus Shoelace components.
   // sl-menu-item is NOT awaited here — it is guaranteed to load because a
   // hidden placeholder is in the DOM (see index.html agent-menu), but we
   // don't want a stray missing component to block agent initialization.
@@ -1059,7 +1059,8 @@ async function init() {
   ]);
 
   // Load the app config FIRST (a fast local bridge call). Everything
-  // app-specific — branding, folders, agents — comes from here. Core ships no
+  // application-specific — branding, folders, agents — comes from here.
+  // Spiritus ships no
   // defaults of its own.
   try {
     const config = await bridge.getConfig();
@@ -1095,7 +1096,7 @@ async function init() {
   await Promise.all([loadSessions(), loadAgents(), refreshVaultTree()]);
 }
 
-// Apply app-supplied branding to the shared Core shell.
+// Apply application-supplied branding to the shared Spiritus shell.
 function applyBranding(config) {
   const title = config.app_title || 'Spiritus';
   document.title = title;

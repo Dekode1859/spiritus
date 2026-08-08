@@ -12,12 +12,12 @@ from spiritus.runtime.shell import _make_ui_handler
 
 class FakeBridge:
     def get_config(self) -> dict:
-        return {"app_title": "Commonplace", "default_model": "opencode/mimo-v2.5-free"}
+        return {"app_title": "Test App", "default_model": "opencode/mimo-v2.5-free"}
 
-    def commonplace_overview(self) -> dict:
-        return {"raw_count": 0, "processed_count": 0, "wiki_count": 0}
+    def test_overview(self) -> dict:
+        return {"item_count": 0}
 
-    def commonplace_import_files(self, paths: list[str]) -> dict:
+    def import_files(self, paths: list[str]) -> dict:
         imported = []
         for path in paths:
             imported.append({
@@ -63,7 +63,7 @@ class RuntimeShellApiTests(unittest.TestCase):
     def test_bridge_post_endpoint_calls_bridge_method(self):
         status, data = self._post_json("/api/bridge/get_config", {"args": []})
         self.assertEqual(status, 200)
-        self.assertEqual(data["app_title"], "Commonplace")
+        self.assertEqual(data["app_title"], "Test App")
 
     def test_health_endpoint_responds(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -88,7 +88,7 @@ class RuntimeShellApiTests(unittest.TestCase):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request(
             "POST",
-            "/api/upload/commonplace_import_files",
+            "/api/upload/import_files",
             body=body,
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )

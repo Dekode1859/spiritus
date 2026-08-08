@@ -147,7 +147,7 @@ class TestListing:
 
 
 class TestNoFolderSemantics:
-    """Core must not invent, require, or privilege any folder name."""
+    """Spiritus must not invent, require, or privilege any folder name."""
 
     def test_ensure_dirs_creates_exactly_what_the_app_asked_for(self, root):
         storage.ensure_dirs(root, ["alpha", "beta"])

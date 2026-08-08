@@ -1,6 +1,6 @@
 """Running a snippet of Python in a fresh process, frozen or not.
 
-Core does several things in short-lived child processes — driving Playwright,
+Spiritus does several things in short-lived child processes — driving Playwright,
 rendering a PDF, opening a native file picker — because they cannot share a
 thread with the pywebview event loop. Unfrozen, that is just
 ``[sys.executable, "-c", code]``.

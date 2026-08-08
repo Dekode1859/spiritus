@@ -1,7 +1,7 @@
 """
 Execution-engine provisioning.
 
-Core hosts OpenCode as its execution engine but is a pure-Python distribution,
+Spiritus hosts OpenCode as its execution engine but is a pure-Python distribution,
 so it cannot carry a ~60 MB platform binary in its wheel. This module resolves
 an engine to run and, on explicit request, downloads one.
 
@@ -32,10 +32,10 @@ from pathlib import Path
 
 ENV_BIN = "SPIRITUS_OPENCODE_BIN"
 
-#: The engine build this Core is tested against; what ``install()`` fetches.
+#: The engine build Spiritus is tested against; what ``install()`` fetches.
 PINNED_VERSION = "1.18.13"
 
-#: Engine versions this Core is known to speak. Core drives a handful of the
+#: Engine versions Spiritus is known to speak. Spiritus drives a handful of the
 #: engine's HTTP endpoints (sessions, providers, events, agents, auth); a major
 #: bump is where those are liable to change shape.
 MIN_VERSION = (1, 17, 0)
@@ -173,7 +173,7 @@ def version_warning(version: str | None) -> str | None:
     if parsed is None:
         return (
             "Could not determine the OpenCode engine version; "
-            f"this Core is tested against {PINNED_VERSION}."
+            f"Spiritus is tested against {PINNED_VERSION}."
         )
     if parsed < MIN_VERSION:
         return (
@@ -182,7 +182,7 @@ def version_warning(version: str | None) -> str | None:
         )
     if parsed >= MAX_VERSION_EXCLUSIVE:
         return (
-            f"OpenCode {version} is newer than this Core was tested against "
+            f"OpenCode {version} is newer than the Spiritus version tested against "
             f"(< {'.'.join(map(str, MAX_VERSION_EXCLUSIVE))}). "
             "Engine API changes may break sessions, providers, or streaming."
         )

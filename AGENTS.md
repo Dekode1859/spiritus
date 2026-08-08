@@ -1,128 +1,133 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file is the single source of repository guidance for Spiritus.
 
-## What is Spiritus
+## What Spiritus is
 
-Spiritus is a deterministic runtime engine for executing AI-driven workflows defined entirely outside the core system. It is a runtime with a swappable core — not a framework, library, or template.
+Spiritus is a Python runtime and SDK for building agent-powered desktop
+applications on top of OpenCode. It combines the application shell, the
+Python↔HTML/CSS/JavaScript bridge, the managed agent runtime, local application
+state, and future application bundling into one developer-facing package.
 
-**Core invariant:** Replace the Core of any Spiritus app with the Core of another and both must still run unmodified. Delete any app and Core remains unchanged and functional.
+The developer builds an application that solves a specific problem. The end
+user should receive one application and should not need to understand OpenCode,
+agent orchestration, tools, skills, permissions, MCP servers, or the processes
+underneath it.
 
-## Running Apps
+The long-term direction is to expose those OpenCode capabilities through
+Spiritus abstractions while keeping OpenCode as the underlying engine:
 
-**Prerequisites:** Python 3.11+, `uv`, and `opencode` CLI (`curl -fsSL https://opencode.ai/install | bash`).
-
-**Learning OS** (reference app, shared chat UI):
-```bash
-cd apps/learning-os
-make install    # uv sync
-make run        # uv run python main.py
+```text
+Application UI + Python logic
+            │
+            ▼
+     Spiritus bridge/runtime
+            │
+            ▼
+     Spiritus agent abstractions
+            │
+            ▼
+          OpenCode
 ```
 
-**Job Search OS** (custom UI, requires Playwright):
-```bash
-cd apps/jobsearch-os
-make install    # uv sync
-make run        # uv run python run.py  (bootstraps Playwright on first run)
-```
+Spiritus is a library and application runtime, not a collection of example
+applications. Consumer applications live in their own repositories.
 
-**Provider credentials** (optional — free `opencode/mimo-v2.5-free` model works without keys):
-```bash
-make auth-setup    # add API key (Anthropic, OpenAI, etc.)
-make auth-status   # list connected providers
-```
+## Current architecture
 
-Credentials are stored app-locally in `.opencode-home/` (not `~/.opencode`), so each app is isolated.
-
-## Architecture
-
-```
+```text
 Spiritus/
-├── spiritus/             # Generic runtime — zero domain knowledge (the package)
-└── apps/
-    ├── learning-os/     # Reference implementation
-    └── jobsearch-os/    # V0 (About Me dashboard)
+├── spiritus/
+│   ├── config.py              # application/runtime configuration contract
+│   ├── runtime/               # PyWebView shell, server lifecycle, paths
+│   ├── bridge.py              # Python↔JavaScript application bridge
+│   ├── storage/               # safe generic filesystem primitives
+│   ├── providers/             # provider/auth/model integration
+│   ├── agents/                # current OpenCode agent configuration loader
+│   ├── engine/                # OpenCode resolution and provisioning
+│   ├── integrations/          # optional integrations kept outside base runtime
+│   ├── tools/                 # tool-system boundary documentation
+│   ├── events/                # event-system boundary documentation
+│   └── ui/                    # built-in chat frontend
+├── tests/                     # Spiritus runtime and bridge tests
+├── docs/                      # package and architecture documentation
+└── .github/workflows/         # CI, build, install, and release checks
 ```
 
-### Core ↔ App Contract
-
-The sole seam between Core and any app is the `AppConfig` object (`spiritus/config.py`). Every app's `main.py` is exactly one object + one call:
+The current public entry point remains:
 
 ```python
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # monorepo apps only
-from spiritus import run, AppConfig, WorkspaceFolder
+from spiritus import AppConfig, WorkspaceFolder, run
 
 run(AppConfig(
     app_id="my-app",
     app_title="My App",
     app_root=Path(__file__).resolve().parent,
-    workspace_dirname="workspace",
-    workspace_folders=(
-        WorkspaceFolder("raw", "inbox", "Raw"),   # (name, lucide_icon, label)
-    ),
-    default_capture_folder="raw",
-    default_agent="my-agent",
-    ui_dir="ui",   # omit to use shared chat UI; set to use a custom frontend dir
+    workspace_folders=(WorkspaceFolder("inbox", "inbox", "Inbox"),),
 ))
 ```
 
-Agent definitions live in the app's `opencode.json`. Core reads them but never defines them.
+This contract is expected to evolve toward a higher-level application SDK. Do
+not add new application-specific behavior to the runtime. New general
+capabilities should be designed as reusable Spiritus APIs or internal engine
+adapters.
 
-### Core Modules
+## Design boundaries
 
-| File | Role |
-|------|------|
-| `spiritus/__init__.py` | Public API: `run()`, `AppConfig`, `WorkspaceFolder` |
-| `spiritus/config.py` | Contract types |
-| `spiritus/runtime/shell.py` | PyWebView window + HTTP server entry point |
-| `spiritus/runtime/server.py` | OpenCode subprocess lifecycle |
-| `spiritus/runtime/paths.py` | Dev vs PyInstaller bundle path resolution |
-| `spiritus/bridge.py` | JS↔Python API (config, storage, providers) |
-| `spiritus/storage/__init__.py` | Generic file CRUD — no folder semantics |
-| `spiritus/providers/__init__.py` | LLM provider abstraction |
-| `spiritus/ui/app.js` | Shared chat UI (sessions, SSE stream, agent picker) |
+- OpenCode is an implementation dependency behind Spiritus, not the preferred
+  application-facing protocol.
+- Frontends should communicate through the Spiritus bridge rather than knowing
+  OpenCode HTTP endpoints or event formats directly.
+- Agent definitions, tools, skills, permissions, schemas, MCP integrations,
+  and sub-agent orchestration are future Spiritus API surfaces. Keep the
+  underlying OpenCode mapping replaceable.
+- Storage and process lifecycle code must remain generic and application-safe.
+- Browser automation is an integration, not a requirement of the base package.
+  Applications that use it own the corresponding dependency.
+- Bundling is a future Spiritus capability, with Windows as the first target.
+  Keep resource lookup and subprocess behavior compatible with frozen builds.
 
-### Execution Model
+## Development
 
-- **Agents** — defined in app's `opencode.json`; executed by OpenCode; Core only surfaces them to the UI
-- **Tools** — OpenCode's built-ins (`read`, `write`, `bash`, `webfetch`, etc.); app-specific tools via MCP servers in `opencode.json`
-- **Events** — OpenCode emits an SSE stream (`/event`); `app.js` drives the UI event bus
-- **Model switching** — rewrites the `"model"` field in the app's `opencode.json`
+Requirements: Python 3.11+, `uv`, and an available OpenCode installation when
+running live agent functionality.
 
-### Storage
-
-`spiritus/storage/__init__.py` exposes `read()`, `write()`, `list_dir()`, `delete()`, `count_dir()`. All paths are relative-safe (`_safe()` prevents traversal). Core has no opinion on what folders mean — that's entirely `AppConfig.workspace_folders`.
-
-### Custom vs Shared UI
-
-- **Shared chat UI** (`spiritus/ui/`) — used when `ui_dir` is unset; built with vanilla JS + Shoelace 2.19.1 web components + Lucide icons
-- **Custom frontend** — set `ui_dir="ui"` in `AppConfig`; app ships its own HTML/JS/CSS (see `apps/jobsearch-os/ui/`)
-
-## Creating a New App
-
-1. Create `apps/my-app/` with `main.py`, `opencode.json`, `pyproject.toml`, `Makefile`
-2. In `main.py`: import from `../../core` and call `run(AppConfig(...))`
-3. In `opencode.json`: define agents with system prompts; set `"model"`
-4. Core handles everything else: window, server, UI, storage, providers, bridge
-
-## Git Commit Rules (MUST FOLLOW)
-
-**Authorship:** Every commit in this repo must use only the global git identity — `Dekode1859 <prateekdwivedi30@gmail.com>`. Never append `Co-Authored-By`, `Co-authored-by`, or any other authorship trailer to commit messages. No exceptions.
-
-**When to commit:** Do not commit autonomously during active feature work. Once the work reaches a point where the user has tested the change and confirmed it behaves as expected (even if minor tweaks remain), stop and ask: *"Would you like to commit the current state?"* Only commit after the user says yes.
-
-**How to commit:**
 ```bash
-git -c user.name="Dekode1859" -c user.email="prateekdwivedi30@gmail.com" commit -m "message here"
+uv sync --group dev
+uv run pytest
+uv run ruff check .
+uv build
 ```
 
-## Core Purity Rules
+The test suite must remain runnable without a GUI toolkit at import time. The
+runtime imports PyWebView lazily where possible so packaging and headless tests
+continue to work.
 
-Core must remain grep-clean of domain words (learning, curriculum, job, resume, etc.). If you're adding something to Core, ask: "would this make sense in a cooking-recipe app?" If not, it belongs in the app.
+## Packaging
 
-## Tech Stack
+The distribution and import package are both named `spiritus`. Do not introduce
+product names such as `spiritus-desktop` or a browser-specific package extra.
+Optional integrations should remain isolated and application-owned until a
+stable integration API exists.
 
-- **Runtime:** Python 3.11+, PyWebView 4.4+, OpenCode CLI
-- **Frontend:** Vanilla JS, Shoelace 2.19.1, Lucide icons, SSE for streaming
-- **Packaging:** `uv` for deps, PyInstaller 6.0+ for bundles, Makefiles for orchestration
-- **Job Search OS extra:** Playwright 1.40+ (browser automation for field detection)
+The future packaging interface is expected to grow toward commands such as
+`spiritus build`, but bundling is not yet implemented. Do not claim that an app
+can be packaged until the relevant platform build has been verified.
+
+## Git rules
+
+Every commit must use only:
+
+```text
+Dekode1859 <prateekdwivedi30@gmail.com>
+```
+
+Never add `Co-Authored-By`, `Co-authored-by`, or another authorship trailer.
+Use the explicit identity when committing:
+
+```bash
+git -c user.name="Dekode1859" -c user.email="prateekdwivedi30@gmail.com" commit -m "message"
+```
+
+Keep commits focused and verify the test suite, lint, and build checks that are
+relevant to the change before committing.

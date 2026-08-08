@@ -1,12 +1,11 @@
-"""
-The Core ↔ Application contract.
+"""Application configuration consumed by the Spiritus runtime.
 
-This is the *only* place an application injects domain identity into the Core
-runtime. Core reads an ``AppConfig`` and nothing else app-specific; it never
-hardcodes a title, folder name, agent, or data directory.
+This is where an application supplies its identity and declarative runtime
+configuration. Spiritus does not hardcode a title, folder name, agent, or data
+directory.
 
-Swapability invariant: any Core that consumes an ``AppConfig`` with these fields
-can run any app, and any app that produces one runs on any such Core.
+The configuration remains deliberately small while the higher-level Spiritus
+agent abstractions continue to grow around it.
 """
 from __future__ import annotations
 
@@ -17,10 +16,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class WorkspaceFolder:
-    """A folder the application wants surfaced in the workspace sidebar.
+    """A folder the application wants surfaced in its workspace UI.
 
-    Core treats this as opaque: it does not know what ``name`` *means*, only
-    that the app wants a folder by that name shown with that icon.
+    Spiritus treats this as opaque: it does not know what ``name`` means, only
+    that the application wants a folder by that name shown with that icon.
     """
     name: str                 # directory name under the workspace root
     icon: str = "folder"      # lucide icon name used by the UI
@@ -32,33 +31,31 @@ class WorkspaceFolder:
 
 @dataclass
 class AppConfig:
-    """Everything Core needs from an application to run it.
+    """The application configuration required by the Spiritus runtime.
 
     No field here carries logic — only identity and declarative configuration.
-    Domain behavior (prompts, schemas, workflows) lives in the app's
-    ``opencode.json`` and its own modules, never in Core.
+    Application behavior can be defined through OpenCode configuration and the
+    higher-level Spiritus APIs.
     """
-    app_id: str                          # data-isolation id, e.g. "learning-os"
+    app_id: str                          # data-isolation id, e.g. "my-app"
     app_title: str                       # window title + UI header
     app_root: Path                       # app dir: holds opencode.json + workspace
 
     # Optional: an application may ship its own front-end (its own index.html +
-    # assets). When set, Core serves this directory instead of the built-in chat
-    # UI. The app's UI still uses the same generic bridge + OpenCode API. Leaving
-    # it unset (the default) keeps the shared chat UI — so existing apps are
-    # unaffected and the swap invariant holds.
+    # assets). When set, Spiritus serves this directory instead of the built-in
+    # chat UI. The UI still uses the same bridge and OpenCode API.
     ui_dir: Path | None = None
     bridge_cls: type[Any] | None = None
 
     workspace_dirname: str = "workspace"          # data root dir name under app_root
-    workspace_folders: tuple[WorkspaceFolder, ...] = ()  # taxonomy (app-defined)
-    default_capture_folder: str = ""              # where ad-hoc notes are written
-    default_agent: str = ""                       # agent selected on launch (app pref)
+    workspace_folders: tuple[WorkspaceFolder, ...] = ()  # taxonomy (application-defined)
+    default_capture_folder: str = ""              # where ad-hoc input is written
+    default_agent: str = ""                       # agent selected on launch
 
     window_size: tuple[int, int] = (1440, 900)
     min_size: tuple[int, int] = (900, 600)
 
-    # Optional environment overrides honored by Core (all generic).
+    # Optional environment overrides honored by the runtime (all generic).
     env_port_var: str = "OPENCODE_PORT"
     env_workspace_var: str = "WORKSPACE_PATH"
 
@@ -69,7 +66,7 @@ class AppConfig:
             # Resolve a relative ui_dir against the app root.
             self.ui_dir = ui if ui.is_absolute() else (self.app_root / ui)
 
-    # Convenience for Core internals — still no domain knowledge.
+    # Convenience for runtime and bridge internals.
     def folder_names(self) -> list[str]:
         return [f.name for f in self.workspace_folders]
 

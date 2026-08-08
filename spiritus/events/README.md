@@ -1,7 +1,7 @@
-# Core Events
+# Spiritus Events
 
-The runtime spec lists *event routing* and a *UI event bus / state
-synchronization* as Core responsibilities.
+Spiritus exposes OpenCode events through a UI event bus and state
+synchronization layer.
 
 In this implementation events originate from **OpenCode's SSE stream**
 (`GET /event`) and are routed by the **UI event bus in `spiritus/ui/app.js`**
@@ -18,4 +18,4 @@ updates (streaming bubbles, working indicator, session list) without knowing
 what the app *is*.
 
 This package is intentionally code-free on the Python side; the event bus lives
-in the Core UI where the events are consumed.
+in the Spiritus UI where the events are consumed.

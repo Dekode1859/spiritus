@@ -1,13 +1,7 @@
-"""
-Characterization tests for spiritus/bridge.py.
+"""Tests for the Spiritus JS-to-Python bridge contract.
 
-Locks the current behavior of Bridge before refactoring. Uses stdlib unittest
-(no new deps). The workspace is redirected to a temp dir via WORKSPACE_PATH,
-which paths.workspace_path() honors, so no real user data is touched.
-
-Run with the jobsearch venv (it provides `webview`):
-    apps/jobsearch-os/.venv/Scripts/python.exe -m unittest tests.test_bridge -v
-or via tests/run_tests.py.
+The workspace is redirected to a temporary directory, so no real user data is
+touched. Run with ``uv run pytest tests/test_bridge.py -v``.
 """
 from __future__ import annotations
 

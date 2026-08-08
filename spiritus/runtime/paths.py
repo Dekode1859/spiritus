@@ -1,8 +1,7 @@
-"""
-Path resolution — works in both dev and PyInstaller .app bundles.
+"""Path resolution for development runs and PyInstaller bundles.
 
-Generic: the only app-specific input is ``app_id`` (e.g. "learning-os"), which
-the application supplies via ``AppConfig``. Core hardcodes no app name.
+The application supplies ``app_id`` via ``AppConfig``. Spiritus hardcodes no
+application name.
 
 Dev layout:    app_root / opencode.json, workspace/ ...
 Bundle layout: sys._MEIPASS (read-only extracted resources)
@@ -20,15 +19,15 @@ def is_bundled() -> bool:
 
 
 def resource_path(relative: str) -> Path:
-    """Path to a read-only bundled resource (the Core ui/ dir, etc.)."""
+    """Path to a read-only bundled resource, such as the built-in UI."""
     if is_bundled():
         return Path(sys._MEIPASS) / relative
-    # Core resources live next to this package.
+    # Spiritus resources live next to this package.
     return Path(__file__).resolve().parent.parent / relative
 
 
 def app_data_dir(app_id: str) -> Path:
-    """Writable directory for an app's user data, in the platform's own place.
+    """Writable directory for application user data, in the platform's own place.
 
     A bundled app cannot keep user data beside itself: an installer may put it
     somewhere the user cannot write (``Program Files``, ``/Applications``), and
@@ -42,7 +41,7 @@ def app_data_dir(app_id: str) -> Path:
         macOS     ~/Library/Application Support/<app_id>
         Linux     $XDG_DATA_HOME/<app_id>, else ~/.local/share/<app_id>
 
-    Dev runs never reach this: ``project_root`` returns the app root instead.
+    Dev runs never reach this: ``project_root`` returns the application root.
     """
     if sys.platform == "win32":
         # Set on every supported Windows, but a service or a stripped
@@ -59,17 +58,17 @@ def app_data_dir(app_id: str) -> Path:
 
 
 def project_root(app_root: Path, app_id: str) -> Path:
-    """Where the app's opencode.json + workspace live at runtime."""
+    """Where the application's OpenCode configuration and workspace live."""
     if is_bundled():
         return app_data_dir(app_id)
     return Path(app_root)
 
 
 def workspace_path(app_root: Path, app_id: str, dirname: str) -> Path:
-    """Resolve the app's workspace (data) root, honoring WORKSPACE_PATH.
+    """Resolve the application's workspace root, honoring WORKSPACE_PATH.
 
-    ``dirname`` and any folder semantics are supplied by the app — Core only
-    joins paths and ensures the root exists.
+    ``dirname`` and any folder semantics are supplied by the application;
+    Spiritus only joins paths and ensures the root exists.
     """
     env_ws = os.environ.get("WORKSPACE_PATH", "").strip()
     if env_ws:

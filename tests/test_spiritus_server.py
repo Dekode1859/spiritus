@@ -99,7 +99,7 @@ def test_engine_dies_even_when_the_app_is_force_killed():
 
     The binding is best effort by design: a host that already confines us to a
     Job Object forbidding nesting (some CI runners, some sandboxes) will refuse
-    it, and Core falls back to cooperative shutdown. Where that happens there is
+    it, and Spiritus falls back to cooperative shutdown. Where that happens there is
     nothing to assert, so the test says so rather than failing or pretending.
     """
     proc = subprocess.Popen(
@@ -203,7 +203,7 @@ def test_start_warns_but_still_launches_an_out_of_range_engine(server, monkeypat
 
     with pytest.raises(_Launched):
         server.start()
-    assert "newer than this Core was tested against" in capsys.readouterr().err
+    assert "newer than the Spiritus version tested against" in capsys.readouterr().err
 
 
 def test_start_records_the_engine_version_it_launched(server, monkeypatch):

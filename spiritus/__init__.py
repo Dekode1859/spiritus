@@ -1,8 +1,10 @@
-"""
-Spiritus Core — a generic runtime for executing AI-driven workflows that are
-defined entirely outside the Core (in applications under ``apps/``).
+"""Spiritus — an SDK and runtime for agent-powered applications.
 
-Public API (the stable Core↔App contract):
+The package provides the runtime foundation and public abstractions that let an
+application use OpenCode agents, tools, skills, permissions, and integrations
+without implementing the underlying process and communication plumbing.
+
+Public API:
 
     from spiritus import run, AppConfig, WorkspaceFolder
 
@@ -13,8 +15,6 @@ Public API (the stable Core↔App contract):
         workspace_folders=(WorkspaceFolder("inbox", "inbox"), ...),
     ))
 
-Core contains no domain knowledge. Swapping this Core for any other Core that
-implements the same public API must leave every app running unchanged.
 """
 from .config import AppConfig, WorkspaceFolder
 from .runtime import run

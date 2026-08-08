@@ -15,8 +15,8 @@ import webview
 from . import agents as agents_mod
 from . import providers as providers_mod
 from . import storage
-from .integrations.browser_agent import SCRIPT as _BROWSER_AGENT
 from .config import AppConfig
+from .integrations.browser_agent import SCRIPT as _BROWSER_AGENT
 from .runtime import paths
 from .runtime.server import OpenCodeServer
 from .runtime.subproc import python_c
@@ -83,7 +83,7 @@ class Bridge:
 
     # ── Workspace / Storage ─────────────────────────────────────────────────────
     def workspace_tree(self) -> dict:
-        """Folder tree with counts. Folder list is app-defined; Core just counts."""
+        """Folder tree with counts. Folder list is application-defined."""
         tree = {}
         for f in self._config.workspace_folders:
             tree[f.name] = {

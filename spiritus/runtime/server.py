@@ -1,13 +1,13 @@
 """
 OpenCode `serve` subprocess lifecycle.
 
-Core hosts OpenCode as the generic execution engine (agents, tools, sessions,
+Spiritus hosts OpenCode as the execution engine (agents, tools, sessions,
 events). This module only manages the process: start on a port, isolate HOME,
 poll until ready, stop. It has no knowledge of agents or domains.
 
 OpenCode is launched with HOME pointed at <project>/.opencode-home so that all
 provider credentials, sessions, and config are isolated from the user's global
-opencode installation, per-app.
+OpenCode installation, per application.
 """
 from __future__ import annotations
 

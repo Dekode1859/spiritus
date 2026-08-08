@@ -1,8 +1,9 @@
 """
 Desktop shell: the generic PyWebView window + local UI HTTP server + lifecycle.
 
-This is the Core entry point an application calls via ``spiritus.run(config)``.
-It is application-independent: the only app-specific input is the ``AppConfig``.
+This is the Spiritus entry point an application calls via ``spiritus.run(config)``.
+It is application-independent: the only application-specific input is
+``AppConfig``.
 """
 from __future__ import annotations
 
@@ -27,7 +28,8 @@ def _parse_multipart_files(body: bytes, content_type: str) -> list[tuple[str, by
 
     Returns ``[(filename, content), ...]`` in document order. Built on the
     stdlib ``email`` parser rather than ``cgi.FieldStorage``, which Python 3.13
-    removed; keeping this in Core means apps do not need a multipart dependency.
+    removed; keeping this in Spiritus means applications do not need a
+    multipart dependency.
     Malformed bodies yield an empty list — the caller answers 400.
     """
     header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
@@ -174,7 +176,7 @@ def _make_ui_handler(ui_dir: str, bridge):
 
 
 def _start_ui_server(ui_dir: str, bridge) -> int:
-    """Serve the Core UI over http://127.0.0.1 with no-cache headers.
+    """Serve the Spiritus UI over http://127.0.0.1 with no-cache headers.
 
     Serving over HTTP (not file://) makes WKWebView apply standard CORS to the
     UI's fetch() calls to OpenCode, and no-cache guarantees fresh assets.
@@ -182,7 +184,7 @@ def _start_ui_server(ui_dir: str, bridge) -> int:
     Threaded so a slow bridge call (a URL fetch, a long extraction, an app's
     background job kickoff) cannot stall unrelated requests — static assets,
     the health check, and other bridge calls keep flowing. Each request runs
-    on its own daemon thread; apps own any shared-state locking they need.
+    on its own daemon thread; applications own any shared-state locking they need.
     """
     NoCacheHandler = _make_ui_handler(ui_dir, bridge)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NoCacheHandler)
@@ -195,7 +197,8 @@ def _start_ui_server(ui_dir: str, bridge) -> int:
 def run(config: AppConfig):
     """Boot a Spiritus application. Blocks until the window is closed."""
     # Before anything else, and before a window exists: in a frozen build this
-    # process may be a child Core spawned to run a snippet, not the app. It has
+    # process may be a child Spiritus process spawned to run a snippet, not the
+    # application. It has
     # to find that out here — the alternative is booting a second copy of the
     # application, which spawns a third. See runtime/subproc.py.
     dispatch_child()

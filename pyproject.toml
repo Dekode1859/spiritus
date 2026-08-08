@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Spiritus is both the distribution name and the import package name.
 name = "spiritus"
 version = "0.3.0"
-description = "A deterministic runtime for AI workflow apps — generic Core, zero domain knowledge"
+description = "An SDK and runtime for building agent-powered desktop applications"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -29,9 +29,8 @@ dependencies = [
 ]
 
 [project.scripts]
-# Provisioning only — Spiritus runs apps, it is not a CLI tool. This exists so
-# the execution engine can be installed explicitly rather than downloaded
-# implicitly at first launch.
+# Provisioning only — the CLI installs and reports the execution engine. It
+# does not launch an application implicitly.
 spiritus = "spiritus.__main__:main"
 
 [project.urls]
@@ -44,17 +43,6 @@ Changelog = "https://github.com/Dekode1859/Spiritus/blob/main/CHANGELOG.md"
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
-]
-# NOT Core dependencies. These belong to the frozen example apps under apps/,
-# and exist here only so tests/test_swap_invariant.py can load those apps as a
-# baseline: if a Core change stops them running, the swap invariant broke.
-# Without these installed the learning-os half of that baseline silently skips.
-apps = [
-    "beautifulsoup4>=4.12.0",
-    "ebooklib>=0.18",
-    "markdownify>=0.13.0",
-    "pypdf>=5.0.0",
-    "python-docx>=1.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -76,14 +64,11 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
-markers = [
-    "frozen_app: characterizes a frozen example app's own internals, not Core. Applied automatically by tests/conftest.py. Excluded from the CI gate (`-m 'not frozen_app'`) because it tests an app that is no longer developed; the swap-invariant suite still loads those apps on every run.",
-]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-extend-exclude = ["apps/*/.venv", "apps/*/.opencode-home", "docs"]
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4"]
@@ -93,8 +78,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Apps deliberately mutate sys.path before importing spiritus (monorepo layout),
-# which forces module-level imports below statements.
-"apps/*/main.py" = ["E402"]
-"apps/*/app_bridge.py" = ["E402"]
 "tests/*" = ["E402"]

@@ -79,15 +79,14 @@ jobs:
 
       - name: Install
         if: steps.plan.outputs.release == 'true'
-        run: uv sync --group dev --group apps
+        run: uv sync --group dev
 
       - name: Verify before publishing
-        # Never publish a red commit. Same gate as CI: Core plus the swap
-        # invariant, which loads both frozen apps against this Core.
+        # Never publish a red commit.
         if: steps.plan.outputs.release == 'true'
         run: |
           uv run ruff check .
-          uv run pytest tests -q -m "not frozen_app"
+          uv run pytest tests -q
 
       - name: Build
         if: steps.plan.outputs.release == 'true'

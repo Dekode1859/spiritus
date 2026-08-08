@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Spiritus Core are recorded here. The format follows
+All notable changes to Spiritus are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -60,7 +60,7 @@ First release packaged for installation from outside the repository.
 ### Added
 - **Engine provisioning.** The OpenCode engine is a ~60 MB native binary that a
   pure-Python wheel cannot carry, and it was previously an undeclared
-  prerequisite: Core called `shutil.which("opencode")` and, when it found
+  prerequisite: Spiritus called `shutil.which("opencode")` and, when it found
   nothing, warned and ran on with every agent dead. There is now an
   `spiritus.engine` module and a CLI:
 
@@ -74,7 +74,7 @@ First release packaged for installation from outside the repository.
   never implicit: `run()` only resolves, and an app calls `engine.ensure()` from
   its own bootstrap if it wants a one-time install. A missing engine now fails
   startup with a message naming the command to run.
-- **Engine version checking.** Core drives several of the engine's HTTP
+- **Engine version checking.** Spiritus drives several of the engine's HTTP
   endpoints against what was previously a completely unpinned server. It now
   declares a supported range, reads the launched engine's version, and warns on
   a mismatch instead of failing mysteriously later. `OpenCodeServer.engine_version`
@@ -83,32 +83,24 @@ First release packaged for installation from outside the repository.
   `uv add "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.2.0"`.
   The shared UI ships as package data, so `resource_path("ui")` resolves inside
   site-packages.
-- `browser` optional extra for Playwright, which Core needs only for the
-  browser-agent subprocess and never imports at import time.
+- Optional Playwright integration for applications that need browser
+  automation; Spiritus never imports it at package import time.
 - Test suite covering the `AppConfig` contract, storage primitives, path
   resolution, agent loading, provider configuration, engine provisioning,
   process lifecycle, and multipart parsing.
-- An executable form of the project's central rule: a test that fails if Core
-  source contains domain vocabulary.
-- **A swap-invariant baseline.** The frozen apps under `apps/` are now loaded
-  against the current Core in the test suite, so a change that would break a
-  real application fails here first. Core's public API and its JS-callable
-  bridge surface are pinned as explicit lists; app front-ends call bridge
-  methods by string, so a rename otherwise passes every import and type check
-  and only fails when a user clicks. The `apps` dependency group installs what
-  those apps need, and CI fails if the baseline skips rather than runs.
+- An executable form of the project's central rule: a test that fails if the
+  reusable package
+  source contains product-specific vocabulary.
 - CI across Linux, macOS, and Windows on Python 3.11–3.13, plus a job that
   installs the package from its own git URL and smoke-tests the result.
 
 ### Changed
 - **Breaking:** the package moved from `core/spiritus/` to `spiritus/` at the
   repository root, so installs no longer need a `#subdirectory=core` fragment.
-  Apps consuming Core as shared source must drop `/ "core"` from their
-  `sys.path` line.
 - **Breaking:** `Bridge.export_resume_pdf` is now `Bridge.export_pdf`. The
   implementation was always generic — it renders arbitrary HTML — and the old
-  name violated the rule that Core carries no domain vocabulary. Callers must
-  update the bridge method name; the signature is unchanged.
+  name violated the rule that Spiritus carries no product-specific vocabulary.
+  Callers must update the bridge method name; the signature is unchanged.
 - Python 3.13 is supported. `runtime/shell.py` no longer imports the stdlib
   `cgi` module, removed in 3.13, so `import spiritus` failed outright there.
   Multipart uploads are parsed with `email` instead, with identical behavior for
@@ -139,12 +131,11 @@ First release packaged for installation from outside the repository.
 
 ## 0.1.0 — never released
 
-Recorded for continuity only: this version existed solely as shared source
-inside the monorepo, was never tagged, and no artifact was ever published for
-it. Initial extraction of the runtime from the first application. Core↔App contract
-(`AppConfig`, `WorkspaceFolder`, `run()`), desktop shell, OpenCode process
-lifecycle, storage primitives, provider abstraction, and the shared chat UI.
-Consumed only as shared source inside the monorepo.
+Recorded for continuity only: this version existed solely as shared source,
+was never tagged, and no artifact was ever published for it. It established
+the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
+shell, OpenCode process lifecycle, storage primitives, provider abstraction,
+and shared chat UI.
 
 [Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.3.1
