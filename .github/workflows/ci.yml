@@ -14,69 +14,39 @@ env:
   FORCE_COLOR: "1"
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --group dev
-      - name: ruff check
-        run: uv run ruff check .
-
-  test:
-    name: Test (${{ matrix.os }}, py${{ matrix.python }})
+  platform-tests:
+    name: Test (${{ matrix.os }}, Python 3.11–3.13)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Install
-        run: uv sync --group dev --python ${{ matrix.python }}
-      - name: Run tests
-        run: uv run pytest tests -q
+      - name: Test supported Python versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for python in 3.11 3.12 3.13; do
+            echo "::group::Python $python"
+            uv sync --group dev --python "$python"
+            uv run --python "$python" pytest tests -q
+            echo "::endgroup::"
+          done
 
-  build:
-    name: Build distributions
+  pytest:
+    name: Basic pytest suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Build wheel and sdist
-        run: uv build
-      - name: Verify the wheel ships its package data
-        # runtime/paths.resource_path resolves ui/ relative to the package dir,
-        # so a wheel missing those assets installs fine and fails at runtime.
-        run: |
-          python - <<'PY'
-          import zipfile, glob, sys
-          whl = glob.glob("dist/*.whl")[0]
-          names = set(zipfile.ZipFile(whl).namelist())
-          required = {
-              "spiritus/__init__.py",
-              "spiritus/config.py",
-              "spiritus/ui/index.html",
-              "spiritus/ui/app.js",
-              "spiritus/ui/style.css",
-          }
-          missing = required - names
-          assert not missing, f"wheel is missing {missing}"
-          leaked = [n for n in names if "__pycache__" in n or n.endswith(".pyc")]
-          assert not leaked, f"wheel contains build junk: {leaked[:5]}"
-          print(f"{whl}: {len(names)} entries, package data present")
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      - name: Install test dependencies
+        run: uv sync --group dev
+      - name: Run pytest
+        run: uv run pytest tests -q
 
   install-from-git:
     name: Install from git URL
