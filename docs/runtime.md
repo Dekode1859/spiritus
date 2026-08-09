@@ -63,10 +63,14 @@ every application author to understand OpenCode's lower-level configuration.
 
 ## Packaging direction
 
-Spiritus 0.0.3 provides a manifest-driven one-folder PyInstaller builder. It
-collects the Spiritus runtime and accepts application-owned data, binaries,
-optional packages, runtime resource paths, and first-launch seed files. The
-result includes a `spiritus-bundle.json` manifest for application validation.
+The 0.0.3x packaging workflow provides a manifest-driven one-folder
+PyInstaller builder. `spiritus bundle init` creates a repository-owned
+`spiritus.bundle.toml` spec and platform wrappers; `spiritus bundle` collects
+the Spiritus runtime and accepts application-owned data, binaries, optional
+packages, runtime resource paths, and first-launch seed files. The result
+includes a `spiritus-bundle.json` manifest for application validation, while
+`spiritus bundle-check` also checks declared source resources and build
+dependencies.
 
 The builder stops before native installers, signing, notarization, and release
 publication. Applications remain responsible for those platform-specific

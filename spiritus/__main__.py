@@ -9,10 +9,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from . import __version__, engine
+from .bundle_config import (
+    CONFIG_NAME,
+    SUPPORTED_PLATFORMS,
+    BundleConfig,
+    check_environment,
+    init_bundle_config,
+    load_bundle_config,
+    write_platform_scripts,
+)
 from .bundling import BundleError, BundleResource, BundleSpec, build_bundle, check_bundle
 
 
@@ -110,44 +120,98 @@ def _mapping(value: str, label: str) -> tuple[str, str]:
     return source, target
 
 
-def cmd_bundle(args) -> int:
+def _config_path(root: Path, value: str | None) -> Path:
+    path = Path(value or CONFIG_NAME)
+    return path if path.is_absolute() else root / path
+
+
+def _run_hook(config: BundleConfig, kind: str) -> None:
+    command = config.commands(kind)
+    if not command:
+        return
+    print(f"Running {kind} hook: {' '.join(command)}")
+    subprocess.run(command, cwd=config.project_root, check=True)
+
+
+def cmd_bundle_init(args) -> int:
     root = Path(args.project_root).resolve()
     try:
-        data = tuple(
-            BundleResource(source, target)
-            for value in args.data
-            for source, target in [_mapping(value, "--data")]
-        )
-        binaries = tuple(
-            BundleResource(source, target)
-            for value in args.binary
-            for source, target in [_mapping(value, "--binary")]
-        )
-        env_paths = dict(
-            _mapping(value, "--runtime-env-path") for value in args.runtime_env_path
-        )
-        seed_files = dict(
-            _mapping(value, "--seed-file") for value in args.seed_file
-        )
-        result = build_bundle(BundleSpec(
-            project_root=root,
+        config = init_bundle_config(
+            root,
+            path=_config_path(root, args.config),
+            platform=args.platform,
             entrypoint=args.entrypoint,
-            name=args.name,
-            app_id=args.app_id,
-            version=args.app_version,
-            datas=data,
-            binaries=binaries,
-            collect_packages=tuple(args.collect_package),
-            hidden_imports=tuple(args.hidden_import),
-            runtime_env_paths=env_paths,
-            seed_files=seed_files,
-            output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
-            work_dir=Path(args.work_dir).resolve() if args.work_dir else None,
-            console=args.console,
-            icon=args.icon,
-            bundle_identifier=args.bundle_identifier,
-        ))
-    except (BundleError, ValueError, TypeError) as exc:
+            force=args.force,
+        )
+        scripts = write_platform_scripts(config)
+    except (BundleError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Created: {config.path}")
+    for script in scripts:
+        print(f"Script:  {script}")
+    print(f"Entrypoint: {config.spec.resolved_entrypoint}")
+    print("Edit the spec to declare application resources, packages, hooks, and installers.")
+    return 0
+
+
+def cmd_bundle(args) -> int:
+    root = Path(args.project_root).resolve()
+    if args.action == "init":
+        return cmd_bundle_init(args)
+    try:
+        config_file = _config_path(root, args.config)
+        explicit = any((args.entrypoint, args.name, args.app_id))
+        config = None
+        if not explicit and config_file.is_file():
+            config = load_bundle_config(config_file, project_root=root)
+            if _platform_name() not in config.platforms:
+                raise BundleError(
+                    f"bundle spec does not enable the current platform {_platform_name()!r}"
+                )
+            _run_hook(config, "prepare")
+            result = build_bundle(config.spec)
+        else:
+            if not all((args.entrypoint, args.name, args.app_id)):
+                raise BundleError(
+                    "entrypoint, name, and app-id are required, or initialize "
+                    f"{config_file.name} with `spiritus bundle init`"
+                )
+            data = tuple(
+                BundleResource(source, target)
+                for value in args.data
+                for source, target in [_mapping(value, "--data")]
+            )
+            binaries = tuple(
+                BundleResource(source, target)
+                for value in args.binary
+                for source, target in [_mapping(value, "--binary")]
+            )
+            env_paths = dict(
+                _mapping(value, "--runtime-env-path") for value in args.runtime_env_path
+            )
+            seed_files = dict(
+                _mapping(value, "--seed-file") for value in args.seed_file
+            )
+            result = build_bundle(BundleSpec(
+                project_root=root,
+                entrypoint=args.entrypoint,
+                name=args.name,
+                app_id=args.app_id,
+                version=args.app_version,
+                datas=data,
+                binaries=binaries,
+                collect_packages=tuple(args.collect_package),
+                hidden_imports=tuple(args.hidden_import),
+                runtime_env_paths=env_paths,
+                seed_files=seed_files,
+                output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
+                work_dir=Path(args.work_dir).resolve() if args.work_dir else None,
+                console=args.console,
+                icon=args.icon,
+                bundle_identifier=args.bundle_identifier,
+            ))
+    except (BundleError, ValueError, TypeError, OSError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"Built: {result.bundle_dir}")
@@ -158,8 +222,19 @@ def cmd_bundle(args) -> int:
 
 def cmd_bundle_check(args) -> int:
     try:
-        payload = check_bundle(Path(args.bundle_dir), app_id=args.app_id)
-    except BundleError as exc:
+        if args.bundle_dir:
+            payload = check_bundle(Path(args.bundle_dir), app_id=args.app_id)
+            config = None
+        else:
+            root = Path(args.project_root).resolve()
+            config = load_bundle_config(_config_path(root, args.config), project_root=root)
+            missing = check_environment(config)
+            if missing:
+                raise BundleError("missing build prerequisites: " + ", ".join(missing))
+            payload = check_bundle(config.bundle_dir, app_id=config.spec.app_id)
+            if args.run_verify:
+                _run_hook(config, "verify")
+    except (BundleError, OSError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(
@@ -168,6 +243,14 @@ def cmd_bundle_check(args) -> int:
     )
     print(f"Files: {len(payload.get('files', []))}")
     return 0
+
+
+def _platform_name() -> str:
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    raise BundleError("Spiritus bundling supports Windows and macOS hosts")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -191,11 +274,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("engine-info", help="show engine resolution and version details")
     p.set_defaults(func=cmd_engine_info)
 
-    p = sub.add_parser("bundle", help="build a one-folder application bundle")
+    p = sub.add_parser("bundle", help="initialize or build a one-folder application bundle")
+    p.add_argument("action", nargs="?", choices=("init",), default=None,
+                   help="initialize a repository-owned bundle spec and platform scripts")
     p.add_argument("--project-root", default=".", help="application project root")
-    p.add_argument("--entrypoint", required=True, help="application entry script")
-    p.add_argument("--name", required=True, help="bundle and executable name")
-    p.add_argument("--app-id", required=True, help="stable writable-data identifier")
+    p.add_argument("--config", default=None, help=f"bundle spec path (default: {CONFIG_NAME})")
+    p.add_argument("--entrypoint", default=None, help="application entry script")
+    p.add_argument("--name", default=None, help="bundle and executable name")
+    p.add_argument("--app-id", default=None, help="stable writable-data identifier")
     p.add_argument("--app-version", default="", help="application version for the manifest")
     p.add_argument(
         "--data", action="append", default=[], metavar="SOURCE=TARGET_DIR",
@@ -226,11 +312,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--icon", default=None, help="application icon inside the project")
     p.add_argument("--bundle-identifier", default=None, help="macOS bundle identifier")
     p.add_argument("--console", action="store_true", help="keep a console window")
+    p.add_argument("--platform", choices=("auto", "all", *SUPPORTED_PLATFORMS), default="auto",
+                   help="platform scripts to generate when using `bundle init`")
+    p.add_argument("--force", action="store_true", help="overwrite an existing spec during init")
     p.set_defaults(func=cmd_bundle)
 
-    p = sub.add_parser("bundle-check", help="validate a Spiritus bundle manifest")
-    p.add_argument("bundle_dir", help="built bundle directory")
+    p = sub.add_parser("bundle-check", help="validate a Spiritus spec, environment, and bundle manifest")
+    p.add_argument("bundle_dir", nargs="?", help="built bundle directory; omit to use the repository spec")
     p.add_argument("--app-id", default=None, help="expected application id")
+    p.add_argument("--project-root", default=".", help="application project root")
+    p.add_argument("--config", default=None, help=f"bundle spec path (default: {CONFIG_NAME})")
+    p.add_argument("--run-verify", action="store_true", help="run the configured application smoke check")
     p.set_defaults(func=cmd_bundle_check)
 
     return parser

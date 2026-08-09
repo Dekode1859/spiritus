@@ -38,6 +38,7 @@ from .runtime import paths
 from .runtime.client import OpenCodeClient
 from .runtime.server import OpenCodeServer
 from .runtime.subproc import python_c
+from .runtime.windows import hidden_console_kwargs
 
 
 class Bridge:
@@ -331,6 +332,7 @@ class Bridge:
             result = subprocess.run(
                 python_c(script),
                 capture_output=True, text=True, timeout=300,
+                **hidden_console_kwargs(),
             )
         except subprocess.TimeoutExpired:
             return ""
@@ -387,6 +389,7 @@ class Bridge:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                **hidden_console_kwargs(),
             )
             line = proc.stdout.readline()
             if not line:
@@ -509,6 +512,7 @@ class Bridge:
             result = subprocess.run(
                 python_c(script, url, profile_dir),
                 capture_output=True, text=True, timeout=60,
+                **hidden_console_kwargs(),
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "Scrape timed out (>60s)"}
@@ -697,6 +701,7 @@ class Bridge:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                **hidden_console_kwargs(),
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "PDF generation timed out (>60s)"}

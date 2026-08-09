@@ -30,6 +30,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from ..runtime.windows import hidden_console_kwargs
+
 ENV_BIN = "SPIRITUS_OPENCODE_BIN"
 
 #: The engine build Spiritus is tested against; what ``install()`` fetches.
@@ -173,6 +175,7 @@ def binary_version(binary: Path | str) -> str | None:
         out = subprocess.run(
             [str(binary), "--version"],
             capture_output=True, text=True, timeout=20, check=False,
+            **hidden_console_kwargs(),
         )
     except Exception:
         return None
