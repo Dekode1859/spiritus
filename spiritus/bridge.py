@@ -16,8 +16,26 @@ from . import agents as agents_mod
 from . import providers as providers_mod
 from . import storage
 from .config import AppConfig
+from .events import (
+    ApprovalRequested,
+    ApprovalResolved,
+    EventNormalizer,
+    RunCompleted,
+    RunFailed,
+    RunIdle,
+    RunStarted,
+    TextDelta,
+    TextSnapshot,
+    ToolCompleted,
+    ToolFailed,
+    ToolProgress,
+    ToolStarted,
+)
 from .integrations.browser_agent import SCRIPT as _BROWSER_AGENT
+from .permissions import ApprovalDecision
+from .persistence import ApprovalAuditLog
 from .runtime import paths
+from .runtime.client import OpenCodeClient
 from .runtime.server import OpenCodeServer
 from .runtime.subproc import python_c
 
@@ -32,6 +50,7 @@ class Bridge:
         )
         # Ensure the app's declared folders exist (names come from the app).
         storage.ensure_dirs(self._workspace, config.folder_names())
+        self._approval_audit = ApprovalAuditLog(self._project_root / ".spiritus")
 
     # ── Config ───────────────────────────────────────────────────────────────
     def get_config(self) -> dict:
@@ -48,6 +67,180 @@ class Bridge:
             "default_agent": self._config.default_agent,
             "default_capture_folder": self._config.default_capture_folder,
         }
+
+    # ── Agents / Sessions ───────────────────────────────────────────────────
+    def _opencode(self) -> OpenCodeClient:
+        if not self._server.port:
+            raise RuntimeError("OpenCode server is not running")
+        directory = self._config.engine_directory or self._project_root
+        return OpenCodeClient(self._server.port, directory=directory)
+
+    def list_agents(self) -> list[dict]:
+        """Return only live agents explicitly declared by this application."""
+        declared = {agent["name"] for agent in agents_mod.load_agents(self._project_root)}
+        return [
+            agent for agent in self._opencode().agents()
+            if agent.get("name") in declared
+        ]
+
+    def list_sessions(self) -> list[dict]:
+        return self._opencode().sessions()
+
+    def create_session(self, title: str = "") -> dict:
+        body = {"title": title.strip()} if title.strip() else {}
+        return self._opencode().create_session(body)
+
+    def session_history(self, session_id: str) -> list[dict]:
+        return self._opencode().messages(session_id)
+
+    def delete_session(self, session_id: str) -> dict:
+        self._opencode().delete_session(session_id)
+        return {"ok": True}
+
+    def send_message(
+        self,
+        session_id: str,
+        agent: str,
+        model: dict | None,
+        text: str,
+    ) -> dict:
+        prompt = text.strip()
+        if not prompt:
+            raise ValueError("message cannot be empty")
+        body = {"parts": [{"type": "text", "text": prompt}]}
+        if agent:
+            body["agent"] = agent
+        if model:
+            body["model"] = model
+        self._opencode().prompt_async(session_id, body)
+        return {"ok": True}
+
+    def session_events(self, session_id: str):
+        """Yield normalized, JSON-safe events for the same-origin UI SSE route."""
+        normalizer = EventNormalizer(session_id)
+        for envelope in self._opencode().events():
+            for event in normalizer.feed(envelope):
+                if isinstance(event, RunStarted):
+                    yield {"type": "run.started", "session_id": session_id}
+                elif isinstance(event, TextDelta):
+                    yield {
+                        "type": "text.delta",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "text": event.text,
+                    }
+                elif isinstance(event, ApprovalRequested):
+                    self._approval_audit.append(
+                        "approval.requested",
+                        session_id=session_id,
+                        request_id=event.request_id,
+                        permission=event.permission,
+                        patterns=list(event.patterns),
+                        metadata=event.metadata,
+                        always=list(event.always),
+                    )
+                    yield {
+                        "type": "approval.requested",
+                        "session_id": session_id,
+                        "request_id": event.request_id,
+                        "permission": event.permission,
+                        "patterns": list(event.patterns),
+                        "metadata": event.metadata,
+                        "always": list(event.always),
+                    }
+                elif isinstance(event, ApprovalResolved):
+                    self._approval_audit.append(
+                        "approval.resolved",
+                        session_id=session_id,
+                        request_id=event.request_id,
+                        decision=event.decision.value,
+                    )
+                    yield {
+                        "type": "approval.resolved",
+                        "session_id": session_id,
+                        "request_id": event.request_id,
+                        "decision": event.decision.value,
+                    }
+                elif isinstance(event, TextSnapshot):
+                    yield {
+                        "type": "text.snapshot",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "text": event.text,
+                    }
+                elif isinstance(event, ToolStarted):
+                    yield {
+                        "type": "tool.started",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "call_id": event.call_id,
+                        "tool": event.tool,
+                        "arguments": event.arguments,
+                    }
+                elif isinstance(event, ToolProgress):
+                    yield {
+                        "type": "tool.progress",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "call_id": event.call_id,
+                        "tool": event.tool,
+                        "title": event.title,
+                        "metadata": event.metadata,
+                    }
+                elif isinstance(event, ToolCompleted):
+                    yield {
+                        "type": "tool.completed",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "call_id": event.call_id,
+                        "tool": event.tool,
+                        "output": event.output,
+                    }
+                elif isinstance(event, ToolFailed):
+                    yield {
+                        "type": "tool.failed",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                        "part_id": event.part_id,
+                        "call_id": event.call_id,
+                        "tool": event.tool,
+                        "error": event.error,
+                    }
+                elif isinstance(event, RunCompleted):
+                    yield {
+                        "type": "run.completed",
+                        "session_id": session_id,
+                        "message_id": event.message_id,
+                    }
+                elif isinstance(event, RunFailed):
+                    yield {
+                        "type": "run.failed",
+                        "session_id": session_id,
+                        "message": event.message,
+                    }
+                    return
+                elif isinstance(event, RunIdle):
+                    yield {"type": "run.idle", "session_id": session_id}
+                    return
+
+    def reply_permission(
+        self,
+        request_id: str,
+        decision: str,
+        message: str = "",
+    ) -> dict:
+        parsed = ApprovalDecision.parse(decision)
+        self._opencode().reply_permission(
+            request_id,
+            parsed.value,
+            message=message.strip() or None,
+        )
+        return {"ok": True}
 
     # ── Providers / Auth ───────────────────────────────────────────────────────
     def get_providers(self) -> dict:

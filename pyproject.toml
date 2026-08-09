@@ -24,6 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
+    "jsonschema>=4.23.0",
     "pywebview>=4.4.0",
     "requests>=2.31.0",
 ]
@@ -64,6 +65,10 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
+markers = [
+    "engine: requires the pinned local OpenCode binary but makes no model call",
+    "live_opencode: makes a real model call through the pinned OpenCode engine",
+]
 
 [tool.ruff]
 target-version = "py311"

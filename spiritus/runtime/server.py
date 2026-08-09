@@ -5,9 +5,11 @@ Spiritus hosts OpenCode as the execution engine (agents, tools, sessions,
 events). This module only manages the process: start on a port, isolate HOME,
 poll until ready, stop. It has no knowledge of agents or domains.
 
-OpenCode is launched with HOME pointed at <project>/.opencode-home so that all
-provider credentials, sessions, and config are isolated from the user's global
-OpenCode installation, per application.
+OpenCode is launched with its home and XDG directories pointed at
+<project>/.opencode-home so that provider credentials, sessions, caches, and
+config are isolated from the user's global OpenCode installation per
+application. Windows needs USERPROFILE as well as HOME because the engine's
+runtime resolves its home directory from USERPROFILE there.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import requests
@@ -27,12 +30,19 @@ from .. import engine
 class OpenCodeServer:
     """One running ``opencode serve`` instance, scoped to a project directory."""
 
-    def __init__(self, project_root: Path, port_env_var: str = "OPENCODE_PORT"):
+    def __init__(
+        self,
+        project_root: Path,
+        port_env_var: str = "OPENCODE_PORT",
+        *,
+        environment: Mapping[str, str] | None = None,
+    ):
         self._project_root = Path(project_root)
         self._port_env_var = port_env_var
         self._process: subprocess.Popen | None = None
         self._port: int | None = None
         self._engine_version: str | None = None
+        self._environment = dict(environment or {})
         self._job = None      # Windows Job Object handle; see _bind_to_lifetime
 
     @property
@@ -46,6 +56,35 @@ class OpenCodeServer:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
+
+    def _engine_environment(self) -> dict[str, str]:
+        """Return an environment that keeps all OpenCode state app-local.
+
+        Merely setting ``HOME`` is insufficient on Windows: Bun's home
+        resolution uses ``USERPROFILE`` and silently falls back to the real
+        user's global OpenCode directories. Explicit XDG paths make the data,
+        config, cache, and state locations deterministic on every platform and
+        keep them aligned with :mod:`spiritus.providers`.
+        """
+        env = os.environ.copy()
+        home = self.home_dir
+        env.update({
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        })
+        env.update(self._environment)
+        env.setdefault("PATH", os.environ.get("PATH", ""))
+        return env
+
+    def set_environment(self, values: Mapping[str, str]) -> None:
+        """Add adapter-owned environment values before the next start."""
+        if self._process is not None:
+            raise RuntimeError("cannot change the OpenCode environment while running")
+        self._environment.update({str(key): str(value) for key, value in values.items()})
 
     def start(self) -> int:
         opencode_bin = engine.resolve()
@@ -61,10 +100,7 @@ class OpenCodeServer:
         configured = int(os.environ.get(self._port_env_var, "0"))
         port = configured if configured > 0 else self._find_free_port()
 
-        # Isolate opencode: override HOME so its data/config/auth are project-local.
-        env = os.environ.copy()
-        env["HOME"] = str(self.home_dir)
-        env.setdefault("PATH", os.environ.get("PATH", ""))
+        env = self._engine_environment()
 
         self._process = subprocess.Popen(
             [opencode_bin, "serve", "--port", str(port)],

@@ -64,9 +64,40 @@ run(AppConfig(
 ))
 ```
 
-The configuration is the current stable entry point. Higher-level APIs for
-agents, tools, skills, permissions, IPC, MCP, and bundling are part of the
-direction of the project and will grow around this runtime foundation.
+The configuration remains the compatible desktop entry point. The
+acceptance-tested higher-level agent runtime can also define and run a complete
+single-agent flow:
+
+```python
+from pathlib import Path
+
+from spiritus import Agent, App, TextDelta
+
+app = App(
+    id="my-agent-app",
+    title="My Agent App",
+    root=Path(__file__).resolve().parent,
+    agents=(Agent(
+        name="assistant",
+        description="Handles the application's tasks",
+        prompt="Follow the user's instructions.",
+        model="opencode/mimo-v2.5-free",
+    ),),
+)
+
+async with app.runtime() as runtime:
+    session = await runtime.require_sessions().create()
+    run = await session.send("Complete this task")
+    async for event in run.events():
+        if isinstance(event, TextDelta):
+            print(event.text, end="")
+    result = await run.result()
+```
+
+The same `App` surface now composes named workspaces and approvals, JSON Schema
+results, typed Python tools, declared subagents, packaged skills and commands,
+and managed local MCP servers. Windows bundling is still future work; these
+capabilities have been validated against the unfrozen runtime.
 
 ## The execution engine
 
@@ -95,6 +126,16 @@ uv sync --group dev
 uv run pytest
 uv run ruff check .
 uv build
+```
+
+Pinned-engine and real-model parity layers are explicit opt-in gates:
+
+```powershell
+$env:SPIRITUS_RUN_ENGINE = "1"
+uv run pytest -m engine -v
+
+$env:SPIRITUS_RUN_LIVE = "1"
+uv run pytest -m live_opencode -v
 ```
 
 The package supports Python 3.11 through 3.13. `pywebview` is loaded lazily by

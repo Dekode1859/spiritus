@@ -6,7 +6,7 @@ without implementing the underlying process and communication plumbing.
 
 Public API:
 
-    from spiritus import run, AppConfig, WorkspaceFolder
+    from spiritus import Agent, App, AppConfig, WorkspaceFolder, run
 
     run(AppConfig(
         app_id="my-app",
@@ -16,10 +16,86 @@ Public API:
     ))
 
 """
+from .agents import Agent
+from .app import AgentRuntime, App
+from .commands import Command
 from .config import AppConfig, WorkspaceFolder
+from .events import (
+    ApprovalRequested,
+    ApprovalResolved,
+    RunCompleted,
+    RunEvent,
+    RunFailed,
+    RunIdle,
+    RunStarted,
+    TextDelta,
+    TextSnapshot,
+    ToolCompleted,
+    ToolFailed,
+    ToolProgress,
+    ToolStarted,
+)
+from .mcp import MCPServer
+from .models import Model
+from .permissions import Access, ApprovalDecision
 from .runtime import run
+from .sessions import (
+    Message,
+    OutputSchema,
+    OutputValidationError,
+    RunCancelledError,
+    RunExecutionError,
+    RunHandle,
+    RunResult,
+    Session,
+    SessionInfo,
+    StructuredOutputError,
+)
+from .skills import Skill
+from .tools import Tool, ToolContext
+from .workspace import Workspace, WorkspaceAccess
 
-__all__ = ["run", "AppConfig", "WorkspaceFolder"]
+__all__ = [
+    "Access",
+    "Agent",
+    "AgentRuntime",
+    "App",
+    "AppConfig",
+    "ApprovalDecision",
+    "ApprovalRequested",
+    "ApprovalResolved",
+    "Command",
+    "Message",
+    "MCPServer",
+    "Model",
+    "OutputSchema",
+    "OutputValidationError",
+    "RunCompleted",
+    "RunCancelledError",
+    "RunEvent",
+    "RunExecutionError",
+    "RunFailed",
+    "RunHandle",
+    "RunIdle",
+    "RunResult",
+    "RunStarted",
+    "Session",
+    "SessionInfo",
+    "Skill",
+    "StructuredOutputError",
+    "TextDelta",
+    "TextSnapshot",
+    "Tool",
+    "ToolContext",
+    "ToolCompleted",
+    "ToolFailed",
+    "ToolProgress",
+    "ToolStarted",
+    "WorkspaceFolder",
+    "Workspace",
+    "WorkspaceAccess",
+    "run",
+]
 
 
 def _read_version() -> str:
