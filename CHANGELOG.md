@@ -15,6 +15,19 @@ the new version and publishes it. Leaving it alone releases nothing.
   environment variables, documentation, workflows, and repository metadata.
   Runtime behavior is unchanged.
 
+## [0.0.3] - 2026-08-10
+
+### Added
+- Added a manifest-driven `spiritus bundle` command for one-folder PyInstaller
+  application bundles.
+- Added external data, binary, package, hidden-import, runtime-resource, and
+  first-launch seed-file inputs so applications keep ownership of their
+  product-specific assets.
+- Added `spiritus bundle-check` and a bundle manifest for deterministic handoff
+  to application-owned installers and smoke tests.
+- Frozen applications now prefer `engine/opencode.exe` or `engine/opencode`
+  from their own bundle before using a system-wide engine.
+
 ## [0.3.1] — 2026-08-07
 
 ### Fixed

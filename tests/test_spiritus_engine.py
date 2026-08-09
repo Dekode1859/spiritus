@@ -15,6 +15,7 @@ import pytest
 
 from spiritus import engine
 from spiritus.__main__ import main as cli_main
+from spiritus.runtime import paths
 
 
 class TestResolution:
@@ -26,6 +27,17 @@ class TestResolution:
         monkeypatch.setenv(engine.ENV_BIN, str(override))
         monkeypatch.setattr(engine.shutil, "which", lambda _: "/usr/bin/opencode")
         assert engine.resolve() == override
+
+    def test_bundled_engine_wins_over_system_path(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "engine" / engine._binary_name()
+        bundled.parent.mkdir()
+        bundled.write_text("engine", encoding="utf-8")
+        monkeypatch.delenv(engine.ENV_BIN, raising=False)
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(paths, "resource_path", lambda relative: bundled)
+        monkeypatch.setattr(engine.shutil, "which", lambda _: "/usr/bin/opencode")
+
+        assert engine.resolve() == bundled
 
     def test_env_override_pointing_at_nothing_resolves_to_none(self, tmp_path, monkeypatch):
         """An operator who set the variable wrongly should be told, not silently

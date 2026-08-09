@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from . import __version__, engine
+from .bundling import BundleError, BundleResource, BundleSpec, build_bundle, check_bundle
 
 
 def _human(n: int) -> str:
@@ -101,6 +103,73 @@ def cmd_engine_info(_args) -> int:
     return 0
 
 
+def _mapping(value: str, label: str) -> tuple[str, str]:
+    source, separator, target = value.partition("=")
+    if not separator or not source or not target:
+        raise ValueError(f"{label} must use SOURCE=TARGET")
+    return source, target
+
+
+def cmd_bundle(args) -> int:
+    root = Path(args.project_root).resolve()
+    try:
+        data = tuple(
+            BundleResource(source, target)
+            for value in args.data
+            for source, target in [_mapping(value, "--data")]
+        )
+        binaries = tuple(
+            BundleResource(source, target)
+            for value in args.binary
+            for source, target in [_mapping(value, "--binary")]
+        )
+        env_paths = dict(
+            _mapping(value, "--runtime-env-path") for value in args.runtime_env_path
+        )
+        seed_files = dict(
+            _mapping(value, "--seed-file") for value in args.seed_file
+        )
+        result = build_bundle(BundleSpec(
+            project_root=root,
+            entrypoint=args.entrypoint,
+            name=args.name,
+            app_id=args.app_id,
+            version=args.app_version,
+            datas=data,
+            binaries=binaries,
+            collect_packages=tuple(args.collect_package),
+            hidden_imports=tuple(args.hidden_import),
+            runtime_env_paths=env_paths,
+            seed_files=seed_files,
+            output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
+            work_dir=Path(args.work_dir).resolve() if args.work_dir else None,
+            console=args.console,
+            icon=args.icon,
+            bundle_identifier=args.bundle_identifier,
+        ))
+    except (BundleError, ValueError, TypeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Built: {result.bundle_dir}")
+    print(f"Manifest: {result.manifest}")
+    print(f"Spec: {result.spec_file}")
+    return 0
+
+
+def cmd_bundle_check(args) -> int:
+    try:
+        payload = check_bundle(Path(args.bundle_dir), app_id=args.app_id)
+    except BundleError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"Bundle OK: {payload.get('name', '(unnamed)')} "
+        f"({payload.get('version') or 'unversioned'})"
+    )
+    print(f"Files: {len(payload.get('files', []))}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="spiritus",
@@ -121,6 +190,48 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("engine-info", help="show engine resolution and version details")
     p.set_defaults(func=cmd_engine_info)
+
+    p = sub.add_parser("bundle", help="build a one-folder application bundle")
+    p.add_argument("--project-root", default=".", help="application project root")
+    p.add_argument("--entrypoint", required=True, help="application entry script")
+    p.add_argument("--name", required=True, help="bundle and executable name")
+    p.add_argument("--app-id", required=True, help="stable writable-data identifier")
+    p.add_argument("--app-version", default="", help="application version for the manifest")
+    p.add_argument(
+        "--data", action="append", default=[], metavar="SOURCE=TARGET_DIR",
+        help="copy an application data file/directory into the bundle (repeatable)",
+    )
+    p.add_argument(
+        "--binary", action="append", default=[], metavar="SOURCE=TARGET_DIR",
+        help="copy an application binary into the bundle (repeatable)",
+    )
+    p.add_argument(
+        "--collect-package", action="append", default=[], metavar="PACKAGE",
+        help="collect a package and its data/binaries (repeatable)",
+    )
+    p.add_argument(
+        "--hidden-import", action="append", default=[], metavar="MODULE",
+        help="add a PyInstaller hidden import (repeatable)",
+    )
+    p.add_argument(
+        "--runtime-env-path", action="append", default=[], metavar="NAME=BUNDLE_PATH",
+        help="set an environment variable to a bundle resource path (repeatable)",
+    )
+    p.add_argument(
+        "--seed-file", action="append", default=[], metavar="BUNDLE_PATH=APP_DATA_PATH",
+        help="copy a bundled file to writable app data on first launch (repeatable)",
+    )
+    p.add_argument("--output-dir", default=None, help="PyInstaller output directory")
+    p.add_argument("--work-dir", default=None, help="PyInstaller work directory")
+    p.add_argument("--icon", default=None, help="application icon inside the project")
+    p.add_argument("--bundle-identifier", default=None, help="macOS bundle identifier")
+    p.add_argument("--console", action="store_true", help="keep a console window")
+    p.set_defaults(func=cmd_bundle)
+
+    p = sub.add_parser("bundle-check", help="validate a Spiritus bundle manifest")
+    p.add_argument("bundle_dir", help="built bundle directory")
+    p.add_argument("--app-id", default=None, help="expected application id")
+    p.set_defaults(func=cmd_bundle_check)
 
     return parser
 

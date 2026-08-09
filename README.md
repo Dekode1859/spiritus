@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.2"
+uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.3"
 ```
 
 ```bash
-pip install "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.2"
+pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.3"
 ```
 
 Applications can then start with the public runtime contract:
@@ -96,8 +96,29 @@ async with app.runtime() as runtime:
 
 The same `App` surface now composes named workspaces and approvals, JSON Schema
 results, typed Python tools, declared subagents, packaged skills and commands,
-and managed local MCP servers. Windows bundling is still future work; these
-capabilities have been validated against the unfrozen runtime.
+and managed local MCP servers. The 0.0.3 bundle builder now provides the
+reusable frozen application layer; native installers remain application-owned.
+
+Spiritus 0.0.3 also provides a manifest-driven PyInstaller bundle builder. The
+builder owns the frozen Spiritus runtime and accepts application-owned files,
+optional packages, binaries, runtime resource paths, and first-launch seed
+files as external inputs:
+
+```powershell
+spiritus bundle `
+  --project-root . `
+  --entrypoint main.py `
+  --name MyApp `
+  --app-id my-app `
+  --data ui=ui `
+  --collect-package webview `
+  --runtime-env-path PLAYWRIGHT_BROWSERS_PATH=ms-playwright `
+  --seed-file opencode.json=opencode.json
+```
+
+This produces the application bundle directory and a `spiritus-bundle.json`
+manifest. Native installers, signing, notarization, and application-specific
+smoke tests remain outside the Spiritus builder.
 
 ## The execution engine
 

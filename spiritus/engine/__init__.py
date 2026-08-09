@@ -117,6 +117,24 @@ def resolve(version: str = PINNED_VERSION) -> Path | None:
         p = Path(override).expanduser()
         return p if p.is_file() else None
 
+    # A frozen application owns its engine payload. Prefer it to a different
+    # system-wide OpenCode installation so the application and its tested
+    # Spiritus/OpenCode contract stay together. The bundle builder places the
+    # binary in this stable location for every platform.
+    if sys.platform == "win32":
+        bundled_name = "opencode.exe"
+    else:
+        bundled_name = "opencode"
+    try:
+        from ..runtime.paths import is_bundled, resource_path
+
+        if is_bundled():
+            bundled = resource_path(f"engine/{bundled_name}")
+            if bundled.is_file():
+                return bundled
+    except (ImportError, OSError):
+        pass
+
     on_path = shutil.which("opencode")
     if on_path:
         return Path(on_path)

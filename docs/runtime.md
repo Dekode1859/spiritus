@@ -63,7 +63,11 @@ every application author to understand OpenCode's lower-level configuration.
 
 ## Packaging direction
 
-The runtime already supports development and bundled path resolution. A future
-bundling layer will build distributable application artifacts, with Windows as
-the first target and additional platform formats following as the packaging
-surface matures.
+Spiritus 0.0.3 provides a manifest-driven one-folder PyInstaller builder. It
+collects the Spiritus runtime and accepts application-owned data, binaries,
+optional packages, runtime resource paths, and first-launch seed files. The
+result includes a `spiritus-bundle.json` manifest for application validation.
+
+The builder stops before native installers, signing, notarization, and release
+publication. Applications remain responsible for those platform-specific
+steps, with Windows as the first installed-application validation target.

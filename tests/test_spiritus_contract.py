@@ -15,6 +15,10 @@ def test_public_api_is_exactly_the_documented_surface():
         "AgentRuntime",
         "App",
         "AppConfig",
+        "BundleError",
+        "BundleResource",
+        "BundleResult",
+        "BundleSpec",
         "ApprovalDecision",
         "ApprovalRequested",
         "ApprovalResolved",
@@ -48,6 +52,8 @@ def test_public_api_is_exactly_the_documented_surface():
         "WorkspaceFolder",
         "Workspace",
         "WorkspaceAccess",
+        "build_bundle",
+        "check_bundle",
         "run",
     }
     for name in spiritus.__all__:

@@ -18,6 +18,14 @@ Public API:
 """
 from .agents import Agent
 from .app import AgentRuntime, App
+from .bundling import (
+    BundleError,
+    BundleResource,
+    BundleResult,
+    BundleSpec,
+    build_bundle,
+    check_bundle,
+)
 from .commands import Command
 from .config import AppConfig, WorkspaceFolder
 from .events import (
@@ -61,6 +69,10 @@ __all__ = [
     "AgentRuntime",
     "App",
     "AppConfig",
+    "BundleError",
+    "BundleResource",
+    "BundleResult",
+    "BundleSpec",
     "ApprovalDecision",
     "ApprovalRequested",
     "ApprovalResolved",
@@ -94,6 +106,8 @@ __all__ = [
     "WorkspaceFolder",
     "Workspace",
     "WorkspaceAccess",
+    "build_bundle",
+    "check_bundle",
     "run",
 ]
 
