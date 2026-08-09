@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.1"
+uv add "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.2"
 ```
 
 ```bash
-pip install "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.1"
+pip install "spiritus @ git+https://github.com/Dekode1859/Spiritus@v0.0.2"
 ```
 
 Applications can then start with the public runtime contract:

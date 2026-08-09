@@ -1,7 +1,7 @@
 # OpenCode capabilities and Spiritus abstraction design
 
-Status: G0-G6 implemented and verified in the uncommitted working tree on
-2026-08-09. This document records the pinned OpenCode server/configuration
+Status: G0-G6 implemented and verified on 2026-08-09. This document records the
+pinned OpenCode server/configuration
 contract, the Spiritus abstraction boundary built around it, the acceptance
 order, and the evidence produced by each gate. Windows application bundling is
 still future work and is not implied by the packaged-extension gate.

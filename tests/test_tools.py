@@ -1,7 +1,9 @@
 """Typed Python tool definition, compilation, and execution tests."""
 from __future__ import annotations
 
+import http.client
 import json
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -103,13 +105,20 @@ def test_tool_server_is_loopback_authenticated_and_revalidates_inputs():
         )
         assert invalid.status_code == 400
 
-        oversized = requests.post(
-            url,
-            headers=headers,
-            data=b"x" * (1024 * 1024 + 1),
-            timeout=5,
+        parsed = urlsplit(url)
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
+        connection.request(
+            "POST",
+            parsed.path,
+            headers={
+                **headers,
+                "content-length": str(1024 * 1024 + 1),
+            },
         )
-        assert oversized.status_code == 413
+        oversized = connection.getresponse()
+        oversized.read()
+        connection.close()
+        assert oversized.status == 413
 
         valid = requests.post(
             url,
