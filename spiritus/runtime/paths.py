@@ -18,12 +18,16 @@ def is_bundled() -> bool:
     return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
+def bundle_root() -> Path:
+    """Return the read-only root of a frozen bundle, or the package root."""
+    if is_bundled():
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent.parent
+
+
 def resource_path(relative: str) -> Path:
     """Path to a read-only bundled resource, such as the built-in UI."""
-    if is_bundled():
-        return Path(sys._MEIPASS) / relative
-    # Spiritus resources live next to this package.
-    return Path(__file__).resolve().parent.parent / relative
+    return bundle_root() / relative
 
 
 def app_data_dir(app_id: str) -> Path:

@@ -1,10 +1,12 @@
 # OpenCode capabilities and Spiritus abstraction design
 
-Status: G0-G6 implemented and verified on 2026-08-09. This document records the
+Status: G0-G6 implemented and verified on 2026-08-09; the 0.0.3 application
+bundle builder is now available and installed-app parity remains a separate
+gate. This document records the
 pinned OpenCode server/configuration
 contract, the Spiritus abstraction boundary built around it, the acceptance
-order, and the evidence produced by each gate. Windows application bundling is
-still future work and is not implied by the packaged-extension gate.
+order, and the evidence produced by each gate. The 0.0.3 bundle builder now
+covers the reusable application-bundle layer; native installers remain separate.
 
 ## Executive summary
 
@@ -104,7 +106,7 @@ once.
 G1 remains the minimum functional parity milestone. G3 is also required before
 a general-purpose application can be considered safe to ship. Passing G0-G6
 does not yet constitute a packaged desktop release: installed/frozen Windows
-validation remains a separate future gate.
+validation remains a separate installed-application gate.
 
 ## Important OpenCode semantics
 
@@ -452,7 +454,7 @@ permission response endpoints, or translate model/provider IDs.
 | Structured output | `OutputSchema`, decoding, Python revalidation, typed errors, normalized fallback persistence | Remove the compatibility fallback after upgrading beyond the pinned history defect |
 | Workspace safety | Empty engine worktree plus exact named external-folder policies; allow/deny/ask live proof | Read/write combinations beyond the first safe file flow and OS-level sandboxing where available |
 | Regression validation | 263 collected tests, six real-engine contracts, and nine real-model live scenarios | Add scheduled CI credentials and an installed/frozen application layer |
-| Packaging | Resource and path handling remain bundle-aware | Windows bundling, installer, and installed-application parity are not implemented |
+| Packaging | Manifest-driven one-folder PyInstaller bundle and bundle manifest | Native installer, signing, and installed-application parity |
 
 ### Baseline findings from a live probe
 
@@ -529,9 +531,9 @@ promise that a service-controlled model catalog will never change.
 9. **Future: build a small external reference application at each stable public gate.**
    Consumer applications stay outside this repository. Port larger existing
    applications only after the G1-G4 contracts they require are green.
-10. **Future: implement bundling last.** Packaging should preserve a runtime contract
-    already proven unfrozen, then gain a separate installed/frozen acceptance
-    test on Windows.
+10. **0.0.3: implement the reusable bundle layer.** Packaging preserves the
+    runtime contract already proven unfrozen; each consuming application still
+    owns its native installer and installed/frozen acceptance test.
 
 This order intentionally avoids designing `App`, `Agent`, `Policy`,
 `Workspace`, `Session`, `Run`, tools, and delegation as one large speculative
