@@ -10,10 +10,20 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
-### Changed
+No unreleased changes.
+
+## [0.0.31] - 2026-08-10
+
+### Added
 - Rebranded the runtime to Spiritus across the Python package, console script,
   environment variables, documentation, workflows, and repository metadata.
   Runtime behavior is unchanged.
+- Added a repository-owned `spiritus.bundle.toml` workflow with
+  `spiritus bundle init`, persistent-spec `spiritus bundle`, generated Windows
+  PowerShell and macOS shell wrappers, and source/environment validation in
+  `spiritus bundle-check`.
+- Added Spiritus-owned hidden-console process options for frozen Windows engine
+  and helper-process launches, while preserving explicit console requests.
 
 ## [0.0.3] - 2026-08-10
 
@@ -150,7 +160,8 @@ the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
 shell, OpenCode process lifecycle, storage primitives, provider abstraction,
 and shared chat UI.
 
-[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.31...HEAD
+[0.0.31]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.31
 [0.3.1]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.2.0

@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.3"
+uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.31"
 ```
 
 ```bash
-pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.3"
+pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.31"
 ```
 
 Applications can then start with the public runtime contract:
@@ -96,29 +96,33 @@ async with app.runtime() as runtime:
 
 The same `App` surface now composes named workspaces and approvals, JSON Schema
 results, typed Python tools, declared subagents, packaged skills and commands,
-and managed local MCP servers. The 0.0.3 bundle builder now provides the
+and managed local MCP servers. The 0.0.31 bundle builder now provides the
 reusable frozen application layer; native installers remain application-owned.
 
-Spiritus 0.0.3 also provides a manifest-driven PyInstaller bundle builder. The
-builder owns the frozen Spiritus runtime and accepts application-owned files,
-optional packages, binaries, runtime resource paths, and first-launch seed
-files as external inputs:
+The 0.0.3x packaging workflow provides a manifest-driven PyInstaller bundle builder. The
+repository-owned `spiritus.bundle.toml` file keeps the application inputs and
+build hooks stable, while Spiritus supplies one workflow for initialization,
+building, and checking:
 
 ```powershell
-spiritus bundle `
-  --project-root . `
-  --entrypoint main.py `
-  --name MyApp `
-  --app-id my-app `
-  --data ui=ui `
-  --collect-package webview `
-  --runtime-env-path PLAYWRIGHT_BROWSERS_PATH=ms-playwright `
-  --seed-file opencode.json=opencode.json
+spiritus bundle init --platform all
+spiritus bundle
+spiritus bundle-check --run-verify
 ```
 
-This produces the application bundle directory and a `spiritus-bundle.json`
-manifest. Native installers, signing, notarization, and application-specific
-smoke tests remain outside the Spiritus builder.
+`bundle init` detects the project metadata and entrypoint, creates the bundle
+spec, and writes platform wrappers under `packaging/`. `bundle` reads that
+spec, runs its optional preparation hook, builds the platform-local bundle,
+and writes a `spiritus-bundle.json` manifest. `bundle-check` validates the
+declared resources, installed build dependencies, manifest hashes, and the
+optional application smoke check. Existing explicit `spiritus bundle` flags
+remain supported for applications that do not want a persistent spec.
+
+Application-owned files, optional packages, binaries, runtime resource paths,
+and first-launch seed files remain external inputs. Native installers,
+signing, notarization, and CI policy remain application-owned; generated
+wrappers can invoke an optional installer hook when the application declares
+one.
 
 ## The execution engine
 

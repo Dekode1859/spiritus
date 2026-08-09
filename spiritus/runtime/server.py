@@ -25,6 +25,7 @@ from pathlib import Path
 import requests
 
 from .. import engine
+from .windows import hidden_console_kwargs
 
 
 class OpenCodeServer:
@@ -111,6 +112,7 @@ class OpenCodeServer:
             # POSIX: put the engine in its own process group so stop() can
             # signal the whole group. Windows gets tree-killed by PID instead.
             start_new_session=(os.name != "nt"),
+            **hidden_console_kwargs(),
         )
         self._bind_to_lifetime(self._process)
 
