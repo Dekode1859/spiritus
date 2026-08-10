@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.32"
+uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.33"
 ```
 
 ```bash
-pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.32"
+pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.33"
 ```
 
 Applications can then start with the public runtime contract:
@@ -123,6 +123,15 @@ and first-launch seed files remain external inputs. Native installers,
 signing, notarization, and CI policy remain application-owned; generated
 wrappers can invoke an optional installer hook when the application declares
 one.
+
+### Update discovery
+
+Opt-in application updates are available through `spiritus.updates`. It supports
+GitHub Releases, GitLab Releases, provider-neutral HTTPS JSON feeds, SemVer by
+default, verified staging, and explicit installer handoff. Applications control
+the trigger, signing, trust, rollback, and restart policy. See
+[docs/updates.md](docs/updates.md) for the TOML schema and private-release
+guidance.
 
 ## The execution engine
 
