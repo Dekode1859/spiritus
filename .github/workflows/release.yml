@@ -42,6 +42,7 @@ jobs:
       - name: Work out what, if anything, to release
         id: plan
         run: |
+          set -euo pipefail
           # Both read from pyproject, so a rename of either cannot desync them.
           # DIST is the filename form of project.name: PEP 427 normalization,
           # which is what uv build stamps on the artifacts (spiritus ->
@@ -56,6 +57,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "dist=$DIST"       >> "$GITHUB_OUTPUT"
           echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+
+          if ! grep -Fq "## [$VERSION]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no release heading for $VERSION."
+            exit 1
+          fi
+          echo "Release metadata is documented for $VERSION."
 
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             # Released by tag: the tag must agree with the package, or the
@@ -108,6 +115,28 @@ jobs:
             fi
           done
           echo "Artifacts match $D $V."
+
+      - name: Verify embedded distribution metadata
+        if: steps.plan.outputs.release == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+          RELEASE_DIST: ${{ steps.plan.outputs.dist }}
+        run: |
+          python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          dist = os.environ["RELEASE_DIST"]
+          wheel = Path("dist") / f"{dist}-{version}-py3-none-any.whl"
+          metadata_name = f"{dist}-{version}.dist-info/METADATA"
+          with zipfile.ZipFile(wheel) as archive:
+              metadata = archive.read(metadata_name).decode("utf-8")
+          if f"Version: {version}" not in metadata:
+              raise SystemExit(f"{wheel} does not contain Version: {version}")
+          print(f"Embedded metadata matches {dist} {version}.")
+          PY
 
       - name: Create the tag
         if: steps.plan.outputs.needs_tag == 'true'
