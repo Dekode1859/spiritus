@@ -10,9 +10,10 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
-- Added opt-in, check-only application update discovery with GitHub Releases,
-  generic HTTPS JSON feeds, SemVer comparison, channel filtering, and platform
-  asset selection. Downloads and installers remain application-owned.
+- Added opt-in application update support with GitHub and GitLab Releases,
+  generic HTTPS JSON feeds, SemVer comparison, channel filtering, platform asset
+  selection, checksum-verified staging, and explicit installer handoff. Apps
+  still own signing, trust, rollback, restart, and release policy.
 
 ## [0.0.32] - 2026-08-10
 

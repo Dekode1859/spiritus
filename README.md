@@ -126,11 +126,12 @@ one.
 
 ### Update discovery
 
-Opt-in check-only update discovery is available through `spiritus.updates`. It
-supports GitHub Releases and a provider-neutral HTTPS JSON feed; applications
-control the trigger and still own download, installer, signing, and restart
-policy. See [docs/updates.md](docs/updates.md) for the TOML schema and private
-release guidance.
+Opt-in application updates are available through `spiritus.updates`. It supports
+GitHub Releases, GitLab Releases, provider-neutral HTTPS JSON feeds, SemVer by
+default, verified staging, and explicit installer handoff. Applications control
+the trigger, signing, trust, rollback, and restart policy. See
+[docs/updates.md](docs/updates.md) for the TOML schema and private-release
+guidance.
 
 ## The execution engine
 

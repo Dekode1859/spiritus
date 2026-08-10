@@ -8,15 +8,19 @@ their installers and platform update policy.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import platform as host_platform
 import re
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+from uuid import uuid4
 
 import requests
 
@@ -31,6 +35,18 @@ class UpdateConfigurationError(UpdateError, ValueError):
 
 class UpdateSourceError(UpdateError):
     """Raised when a release source cannot be read or decoded."""
+
+
+class UpdateDownloadError(UpdateError):
+    """Raised when an update artifact cannot be downloaded or staged."""
+
+
+class UpdateVerificationError(UpdateDownloadError):
+    """Raised when an artifact fails its size or checksum verification."""
+
+
+class UpdateInstallerError(UpdateError):
+    """Raised when a staged installer cannot be handed off to the OS."""
 
 
 class UpdateStatus(StrEnum):
@@ -296,6 +312,39 @@ class JsonFeedSource(_HttpSource):
             raise UpdateSourceError("invalid Spiritus update feed") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class GitLabReleaseSource(_HttpSource):
+    """Read release metadata from a public or authenticated GitLab project."""
+
+    project: str
+    api_url: str = "https://gitlab.com/api/v4"
+    session: Any = field(default=None, repr=False, compare=False)
+    timeout: float = 10.0
+    headers: Mapping[str, str] = field(default_factory=dict, repr=False, compare=False)
+    token_env: str | None = field(default=None, repr=False, compare=False)
+    token_header: str = field(default="PRIVATE-TOKEN", repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self.project.strip():
+            raise UpdateConfigurationError("GitLab project must not be empty")
+        _HttpSource.__init__(
+            self,
+            session=self.session,
+            timeout=self.timeout,
+            headers=self.headers,
+            token_env=self.token_env,
+            token_header=self.token_header,
+        )
+
+    def releases(self, *, channel: str) -> tuple[ReleaseCandidate, ...]:
+        project = quote(self.project.strip(), safe="")
+        path = f"/projects/{project}/releases"
+        payload = self._get_json(self.api_url.rstrip("/") + path + "?per_page=100")
+        if not isinstance(payload, list):
+            raise UpdateSourceError("GitLab releases response must be an array")
+        return tuple(_gitlab_release(item) for item in payload if isinstance(item, dict))
+
+
 def _github_release(payload: Mapping[str, object]) -> ReleaseCandidate:
     version = str(payload.get("tag_name") or "").strip()
     if not version:
@@ -328,6 +377,43 @@ def _github_release(payload: Mapping[str, object]) -> ReleaseCandidate:
         release_notes_url=str(payload["html_url"]) if payload.get("html_url") else None,
         published_at=str(payload["published_at"]) if payload.get("published_at") else None,
         source_url=str(payload["html_url"]) if payload.get("html_url") else None,
+    )
+
+
+def _gitlab_release(payload: Mapping[str, object]) -> ReleaseCandidate:
+    version = str(payload.get("tag_name") or "").strip()
+    if not version:
+        raise UpdateSourceError("GitLab release is missing tag_name")
+    artifacts = []
+    raw_assets = payload.get("assets", {})
+    if not isinstance(raw_assets, dict):
+        raise UpdateSourceError(f"GitLab release {version!r} has invalid assets")
+    raw_links = raw_assets.get("links", [])
+    if not isinstance(raw_links, list):
+        raise UpdateSourceError(f"GitLab release {version!r} has invalid asset links")
+    for raw_link in raw_links:
+        if not isinstance(raw_link, dict):
+            continue
+        url = raw_link.get("direct_asset_url") or raw_link.get("url")
+        artifacts.append(
+            UpdateArtifact(
+                filename=str(raw_link.get("name") or ""),
+                url=str(url or ""),
+                kind=str(raw_link["link_type"]) if raw_link.get("link_type") else None,
+            )
+        )
+    release_url = payload.get("_links", {})
+    if isinstance(release_url, dict):
+        release_url = release_url.get("self")
+    return ReleaseCandidate(
+        version=version,
+        channel=str(payload["channel"]) if payload.get("channel") else None,
+        prerelease=bool(payload.get("upcoming_release")),
+        release_notes=str(payload["description"]) if payload.get("description") else None,
+        release_notes_url=str(payload["web_url"]) if payload.get("web_url") else None,
+        published_at=str(payload["released_at"]) if payload.get("released_at") else None,
+        artifacts=tuple(item for item in artifacts if item.filename and item.url),
+        source_url=str(release_url) if release_url else None,
     )
 
 
@@ -477,6 +563,7 @@ class UpdateConfig:
         app_id: str,
         current_version: str,
         session: Any = None,
+        version_policy: VersionPolicy | None = None,
     ) -> UpdateConfig:
         """Build a config from the ``[updates]`` TOML table."""
         if not isinstance(payload, Mapping):
@@ -491,7 +578,7 @@ class UpdateConfig:
         ):
             raise UpdateConfigurationError("updates.assets must be a table of string patterns")
         versioning = str(payload.get("versioning", "semver"))
-        if versioning != "semver":
+        if version_policy is None and versioning != "semver":
             raise UpdateConfigurationError(
                 f"unsupported built-in update versioning policy: {versioning!r}; "
                 "provide a VersionPolicy in Python"
@@ -501,6 +588,7 @@ class UpdateConfig:
             current_version=current_version,
             source=source,
             channel=str(payload.get("channel", "stable")),
+            version_policy=version_policy or SemVerPolicy(),
             asset_patterns=patterns,
             enabled=bool(payload.get("enabled", True)),
         )
@@ -538,11 +626,18 @@ def source_from_mapping(payload: Mapping[str, object], *, session: Any = None) -
             token_env=token_env,
         )
     if source_type == "gitlab":
-        raise UpdateConfigurationError(
-            "GitLab update source is planned for a later 0.0.3x release; use a JSON feed for now"
+        project = str(payload.get("project") or payload.get("repository") or "")
+        return GitLabReleaseSource(
+            project=project,
+            api_url=str(payload.get("api_url", "https://gitlab.com/api/v4")),
+            session=session,
+            timeout=timeout,
+            headers=headers,
+            token_env=token_env,
+            token_header=str(payload.get("token_header", "PRIVATE-TOKEN")),
         )
     raise UpdateConfigurationError(
-        "updates.source.type must be 'github' or 'json' in the current release"
+        "updates.source.type must be 'github', 'gitlab', or 'json'"
     )
 
 
@@ -562,6 +657,215 @@ class UpdateCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class StagedUpdate:
+    """An update artifact downloaded and verified in an app-owned directory."""
+
+    artifact: UpdateArtifact
+    path: Path
+    bytes: int
+    sha256: str
+
+
+class UpdateDownloader:
+    """Stream, verify, and atomically stage an update artifact.
+
+    Staging never executes or replaces the application. Callers choose the
+    writable directory and decide when, or whether, to hand the file to an
+    installer.
+    """
+
+    def __init__(
+        self,
+        *,
+        session: Any = None,
+        timeout: float = 120.0,
+        chunk_size: int = 1 << 16,
+        max_bytes: int = 2 * 1024 * 1024 * 1024,
+        allow_insecure_http: bool = False,
+    ) -> None:
+        if timeout <= 0:
+            raise UpdateConfigurationError("update download timeout must be positive")
+        if chunk_size <= 0:
+            raise UpdateConfigurationError("update download chunk size must be positive")
+        if max_bytes <= 0:
+            raise UpdateConfigurationError("update download max_bytes must be positive")
+        self._session = session
+        self._timeout = timeout
+        self._chunk_size = chunk_size
+        self._max_bytes = max_bytes
+        self._allow_insecure_http = allow_insecure_http
+
+    def stage(
+        self,
+        artifact: UpdateArtifact,
+        destination: Path,
+        *,
+        require_sha256: bool = True,
+    ) -> StagedUpdate:
+        """Download ``artifact`` into ``destination`` and verify it atomically."""
+        filename = self._safe_filename(artifact.filename)
+        expected_sha256 = self._expected_sha256(artifact.sha256, require_sha256=require_sha256)
+        self._validate_url(artifact.url)
+        if artifact.size is not None and artifact.size < 0:
+            raise UpdateVerificationError("update artifact size must not be negative")
+        if artifact.size is not None and artifact.size > self._max_bytes:
+            raise UpdateDownloadError("update artifact exceeds configured maximum size")
+
+        destination = Path(destination).resolve()
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise UpdateDownloadError(f"could not create update staging directory: {destination}") from exc
+        final_path = destination / filename
+        temporary_path = destination / f".{filename}.{uuid4().hex}.part"
+        downloaded = 0
+        digest = hashlib.sha256()
+        response = None
+        try:
+            client = self._session or requests
+            response = client.get(
+                artifact.url,
+                headers={"Accept": "application/octet-stream"},
+                timeout=self._timeout,
+                stream=True,
+            )
+            response.raise_for_status()
+            self._validate_response_url(response)
+            content_length = self._content_length(response)
+            if content_length is not None and content_length > self._max_bytes:
+                raise UpdateDownloadError("update response exceeds configured maximum size")
+            if artifact.size is not None and content_length is not None and content_length != artifact.size:
+                raise UpdateVerificationError("update response size does not match release metadata")
+            with temporary_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=self._chunk_size):
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > self._max_bytes:
+                        raise UpdateDownloadError("update download exceeds configured maximum size")
+                    digest.update(chunk)
+                    handle.write(chunk)
+            if artifact.size is not None and downloaded != artifact.size:
+                raise UpdateVerificationError("downloaded update size does not match release metadata")
+            actual_sha256 = digest.hexdigest()
+            if expected_sha256 and actual_sha256 != expected_sha256:
+                raise UpdateVerificationError("downloaded update checksum does not match release metadata")
+            os.replace(temporary_path, final_path)
+            return StagedUpdate(
+                artifact=artifact,
+                path=final_path,
+                bytes=downloaded,
+                sha256=actual_sha256,
+            )
+        except UpdateError:
+            raise
+        except (OSError, requests.RequestException, ValueError) as exc:
+            raise UpdateDownloadError(f"could not stage update artifact: {artifact.filename}") from exc
+        finally:
+            if response is not None:
+                close = getattr(response, "close", None)
+                if close is not None:
+                    close()
+            temporary_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _safe_filename(filename: str) -> str:
+        value = str(filename).strip()
+        if not value or value in {".", ".."} or "\x00" in value or Path(value).name != value:
+            raise UpdateDownloadError(f"unsafe update artifact filename: {filename!r}")
+        return value
+
+    @staticmethod
+    def _expected_sha256(value: str | None, *, require_sha256: bool) -> str | None:
+        if not value:
+            if require_sha256:
+                raise UpdateVerificationError("update artifact has no SHA-256 checksum")
+            return None
+        normalized = str(value).strip().lower().removeprefix("sha256:")
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            raise UpdateVerificationError("update artifact SHA-256 checksum is invalid")
+        return normalized
+
+    def _validate_url(self, url: str) -> None:
+        parsed = urlparse(str(url))
+        allowed = {"https"}
+        if self._allow_insecure_http:
+            allowed.add("http")
+        if parsed.scheme.lower() not in allowed or not parsed.netloc:
+            raise UpdateDownloadError(f"update artifact URL must use HTTP(S): {url!r}")
+
+    def _validate_response_url(self, response: Any) -> None:
+        final_url = getattr(response, "url", None)
+        if final_url:
+            self._validate_url(str(final_url))
+
+    @staticmethod
+    def _content_length(response: Any) -> int | None:
+        headers = getattr(response, "headers", {}) or {}
+        raw_value = next(
+            (value for key, value in headers.items() if str(key).lower() == "content-length"),
+            None,
+        )
+        if raw_value is None:
+            return None
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise UpdateDownloadError("update response has an invalid content length") from exc
+        if value < 0:
+            raise UpdateDownloadError("update response has a negative content length")
+        return value
+
+
+class InstallerHandoff(Protocol):
+    """Application-selected handoff for a verified staged installer."""
+
+    def launch(
+        self,
+        staged: StagedUpdate,
+        *,
+        args: Sequence[str] = (),
+        cwd: Path | None = None,
+    ) -> Any:
+        """Launch the staged installer and return its process handle."""
+
+
+class SubprocessInstallerHandoff:
+    """Launch a staged installer without a shell or interpolated command line."""
+
+    def __init__(self, *, creationflags: int = 0) -> None:
+        self._creationflags = creationflags
+
+    def launch(
+        self,
+        staged: StagedUpdate,
+        *,
+        args: Sequence[str] = (),
+        cwd: Path | None = None,
+    ) -> Any:
+        path = Path(staged.path).resolve()
+        if not path.is_file():
+            raise UpdateInstallerError(f"staged installer does not exist: {path}")
+        if staged.bytes != path.stat().st_size:
+            raise UpdateVerificationError("staged installer size changed before launch")
+        if staged.sha256:
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != staged.sha256.lower().removeprefix("sha256:"):
+                raise UpdateVerificationError("staged installer checksum changed before launch")
+        command = [str(path), *(str(value) for value in args)]
+        kwargs: dict[str, Any] = {"cwd": str(cwd) if cwd else None, "shell": False}
+        if self._creationflags:
+            kwargs["creationflags"] = self._creationflags
+        try:
+            return subprocess.Popen(command, **kwargs)
+        except OSError as exc:
+            raise UpdateInstallerError(f"could not launch staged installer: {path}") from exc
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateClient:
     """Check for updates without downloading or modifying the application."""
 
@@ -577,15 +881,25 @@ class UpdateClient:
             releases = self.config.source.releases(channel=self.config.channel)
             candidates = []
             for release in releases:
-                if release.app_id and release.app_id != self.config.app_id:
-                    continue
-                if not _channel_matches(release, self.config.channel):
-                    continue
                 try:
                     normalized = self.config.version_policy.normalize(release.version)
                 except (TypeError, ValueError):
                     continue
-                candidates.append(replace(release, version=normalized))
+                semver_prerelease = False
+                try:
+                    semver_prerelease = bool(parse_semver(normalized).prerelease)
+                except ValueError:
+                    pass
+                normalized_release = replace(
+                    release,
+                    version=normalized,
+                    prerelease=release.prerelease or semver_prerelease,
+                )
+                if normalized_release.app_id and normalized_release.app_id != self.config.app_id:
+                    continue
+                if not _channel_matches(normalized_release, self.config.channel):
+                    continue
+                candidates.append(normalized_release)
             candidate = self._newest(candidates)
             if candidate is None:
                 return UpdateCheck(UpdateStatus.CURRENT, current_version)
@@ -612,6 +926,20 @@ class UpdateClient:
         except UpdateError as exc:
             return UpdateCheck(UpdateStatus.ERROR, current_version, error=str(exc))
 
+    def stage_update(
+        self,
+        check: UpdateCheck,
+        destination: Path,
+        *,
+        downloader: UpdateDownloader | None = None,
+        require_sha256: bool = True,
+    ) -> StagedUpdate:
+        """Stage an available result; this never launches or installs it."""
+        if not check.available or check.artifact is None:
+            raise UpdateDownloadError("update check does not contain an available artifact")
+        worker = downloader or UpdateDownloader()
+        return worker.stage(check.artifact, destination, require_sha256=require_sha256)
+
     def _newest(self, releases: Sequence[ReleaseCandidate]) -> ReleaseCandidate | None:
         newest = None
         for release in releases:
@@ -621,7 +949,9 @@ class UpdateClient:
 
 
 __all__ = [
+    "GitLabReleaseSource",
     "GitHubReleaseSource",
+    "InstallerHandoff",
     "JsonFeedSource",
     "ReleaseCandidate",
     "ReleaseSource",
@@ -631,11 +961,17 @@ __all__ = [
     "UpdateCheck",
     "UpdateClient",
     "UpdateConfig",
+    "UpdateDownloader",
     "UpdateConfigurationError",
+    "UpdateDownloadError",
     "UpdateError",
+    "UpdateInstallerError",
     "UpdateSourceError",
     "UpdateStatus",
+    "UpdateVerificationError",
     "VersionPolicy",
+    "StagedUpdate",
+    "SubprocessInstallerHandoff",
     "parse_semver",
     "source_from_mapping",
 ]

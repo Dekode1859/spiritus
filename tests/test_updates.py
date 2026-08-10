@@ -1,15 +1,25 @@
 """Offline tests for Spiritus's check-only update discovery."""
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import pytest
 
 from spiritus import (
     GitHubReleaseSource,
+    GitLabReleaseSource,
     JsonFeedSource,
     SemVerPolicy,
+    StagedUpdate,
+    SubprocessInstallerHandoff,
+    UpdateArtifact,
     UpdateClient,
     UpdateConfig,
+    UpdateDownloader,
+    UpdateDownloadError,
     UpdateStatus,
+    UpdateVerificationError,
 )
 
 
@@ -32,6 +42,34 @@ class FakeSession:
     def get(self, url, *, headers, timeout):
         self.calls.append((url, headers, timeout))
         return FakeResponse(self.payload)
+
+
+class FakeDownloadResponse:
+    def __init__(self, payload: bytes, *, url: str = "https://downloads.example.test/app.exe"):
+        self.payload = payload
+        self.url = url
+        self.headers = {"content-length": str(len(payload))}
+        self.closed = False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, *, chunk_size):
+        for offset in range(0, len(self.payload), max(1, chunk_size)):
+            yield self.payload[offset : offset + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+class FakeDownloadSession:
+    def __init__(self, response: FakeDownloadResponse):
+        self.response = response
+        self.calls = []
+
+    def get(self, url, *, headers, timeout, stream):
+        self.calls.append((url, headers, timeout, stream))
+        return self.response
 
 
 def test_semver_policy_accepts_tags_and_orders_prereleases():
@@ -114,6 +152,201 @@ def test_github_stable_channel_excludes_prereleases():
 
     assert result.status is UpdateStatus.CURRENT
     assert result.candidate is None
+
+
+def test_semver_stable_channel_excludes_unmarked_prerelease_tags():
+    session = FakeSession(
+        {
+            "schema": 1,
+            "app_id": "example",
+            "version": "2.0.0-beta.1",
+            "artifacts": [],
+        }
+    )
+    config = UpdateConfig(
+        app_id="example",
+        current_version="1.0.0",
+        source=JsonFeedSource("https://downloads.example.test/stable.json", session=session),
+    )
+
+    result = UpdateClient(config).check()
+
+    assert result.status is UpdateStatus.CURRENT
+
+
+def test_gitlab_source_reads_encoded_project_and_release_links():
+    session = FakeSession(
+        [
+            {
+                "tag_name": "v1.2.0",
+                "name": "Persona 1.2.0",
+                "description": "GitLab release",
+                "web_url": "https://gitlab.example.test/group/persona/-/releases/v1.2.0",
+                "released_at": "2026-08-11T00:00:00Z",
+                "assets": {
+                    "links": [
+                        {
+                            "name": "Persona-Setup-1.2.0.exe",
+                            "url": "https://gitlab.example.test/downloads/1.2.0.exe",
+                            "direct_asset_url": "https://gitlab.example.test/-/project/1/jobs/artifacts/main/raw/Persona-Setup-1.2.0.exe",
+                            "link_type": "package",
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+    source = GitLabReleaseSource(
+        "group/persona",
+        api_url="https://gitlab.example.test/api/v4",
+        session=session,
+    )
+    config = UpdateConfig(
+        app_id="persona",
+        current_version="1.0.0",
+        source=source,
+        asset_patterns={"windows_x86_64": "Persona-Setup-{version}.exe"},
+    )
+
+    result = UpdateClient(config, platform="win32", architecture="x86_64").check()
+
+    assert result.status is UpdateStatus.AVAILABLE
+    assert result.artifact is not None
+    assert result.artifact.url.endswith("Persona-Setup-1.2.0.exe")
+    assert session.calls[0][0] == (
+        "https://gitlab.example.test/api/v4/projects/group%2Fpersona/releases?per_page=100"
+    )
+    mapped = UpdateConfig.from_mapping(
+        {
+            "source": {
+                "type": "gitlab",
+                "project": "group/persona",
+                "api_url": "https://gitlab.example.test/api/v4",
+            }
+        },
+        app_id="persona",
+        current_version="1.0.0",
+        session=session,
+    )
+    assert isinstance(mapped.source, GitLabReleaseSource)
+
+
+def test_custom_version_policy_can_be_supplied_alongside_toml():
+    class BuildPolicy:
+        def normalize(self, value: str) -> str:
+            return str(value).removeprefix("build-")
+
+        def compare(self, left: str, right: str) -> int:
+            return (int(left) > int(right)) - (int(left) < int(right))
+
+    session = FakeSession(
+        {
+            "schema": 1,
+            "app_id": "example",
+            "version": "build-11",
+            "artifacts": [
+                {
+                    "filename": "Example-11.exe",
+                    "url": "https://downloads.example.test/Example-11.exe",
+                }
+            ],
+        }
+    )
+    config = UpdateConfig.from_mapping(
+        {
+            "versioning": "build-number",
+            "source": {"type": "json", "url": "https://downloads.example.test/feed.json"},
+        },
+        app_id="example",
+        current_version="build-10",
+        session=session,
+        version_policy=BuildPolicy(),
+    )
+
+    result = UpdateClient(config, platform="win32", architecture="x86_64").check()
+
+    assert result.status is UpdateStatus.AVAILABLE
+    assert result.current_version == "10"
+    assert result.candidate is not None
+    assert result.candidate.version == "11"
+
+
+def test_downloader_streams_verifies_and_atomically_stages(tmp_path: Path):
+    payload = b"Persona installer payload"
+    response = FakeDownloadResponse(payload)
+    session = FakeDownloadSession(response)
+    artifact = UpdateArtifact(
+        filename="Persona-Setup-1.2.0.exe",
+        url=response.url,
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    staged = UpdateDownloader(session=session, chunk_size=4).stage(artifact, tmp_path)
+
+    assert staged.path == tmp_path / artifact.filename
+    assert staged.path.read_bytes() == payload
+    assert staged.bytes == len(payload)
+    assert staged.sha256 == artifact.sha256
+    assert response.closed is True
+    assert list(tmp_path.glob("*.part")) == []
+    assert session.calls[0][3] is True
+
+
+def test_downloader_rejects_checksum_mismatch_and_removes_partial_file(tmp_path: Path):
+    payload = b"tampered installer"
+    response = FakeDownloadResponse(payload)
+    artifact = UpdateArtifact(
+        filename="Persona-Setup.exe",
+        url=response.url,
+        sha256="0" * 64,
+    )
+
+    with pytest.raises(UpdateVerificationError, match="checksum"):
+        UpdateDownloader(session=FakeDownloadSession(response)).stage(artifact, tmp_path)
+
+    assert not (tmp_path / artifact.filename).exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_downloader_requires_https_and_checksum_by_default(tmp_path: Path):
+    with pytest.raises(UpdateVerificationError, match="no SHA-256"):
+        UpdateDownloader().stage(
+            UpdateArtifact("Example.exe", "https://downloads.example.test/Example.exe"),
+            tmp_path,
+        )
+
+    with pytest.raises(UpdateDownloadError, match=r"HTTP\(S\)"):
+        UpdateDownloader().stage(
+            UpdateArtifact("Example.exe", "http://downloads.example.test/Example.exe", sha256="0" * 64),
+            tmp_path,
+        )
+
+
+def test_subprocess_handoff_uses_argument_vector_without_shell(tmp_path: Path, monkeypatch):
+    installer = tmp_path / "Persona-Setup.exe"
+    installer.write_bytes(b"verified")
+    artifact = UpdateArtifact(installer.name, "https://downloads.example.test/Persona-Setup.exe")
+    staged = StagedUpdate(
+        artifact,
+        installer,
+        installer.stat().st_size,
+        hashlib.sha256(b"verified").hexdigest(),
+    )
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return "process"
+
+    monkeypatch.setattr("spiritus.updates.subprocess.Popen", fake_popen)
+
+    process = SubprocessInstallerHandoff().launch(staged, args=("/S",))
+
+    assert process == "process"
+    assert captured["command"] == [str(installer.resolve()), "/S"]
+    assert captured["kwargs"]["shell"] is False
 
 
 def test_json_feed_selects_platform_metadata_without_filename_rules():
