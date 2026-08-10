@@ -60,6 +60,7 @@ class BundleSpec:
     console: bool = False
     icon: Path | str | None = None
     bundle_identifier: str | None = None
+    defer_resource_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).resolve()
@@ -108,13 +109,7 @@ class BundleSpec:
             object.__setattr__(self, "collect_packages", ("spiritus", *self.collect_packages))
         _ = self.resolved_entrypoint
         _ = self.resolved_icon
-        for resource in (*self.datas, *self.binaries):
-            if not isinstance(resource, BundleResource):
-                raise TypeError("datas and binaries must contain BundleResource values")
-            source = _inside(self.project_root, Path(resource.source), "resource")
-            if not source.exists():
-                raise BundleError(f"bundle resource does not exist: {source}")
-            _bundle_target(resource.target)
+        self._validate_resource_declarations()
         for variable, relative in self.runtime_env_paths.items():
             if not variable or not variable.replace("_", "").isalnum():
                 raise BundleError(f"invalid runtime environment variable: {variable!r}")
@@ -122,6 +117,22 @@ class BundleSpec:
         for source, target in self.seed_files.items():
             _bundle_relative(source, "seed source")
             _app_data_relative(target, "seed destination")
+
+    def _validate_resource_declarations(self) -> None:
+        for resource in (*self.datas, *self.binaries):
+            if not isinstance(resource, BundleResource):
+                raise TypeError("datas and binaries must contain BundleResource values")
+            source = _inside(self.project_root, Path(resource.source), "resource")
+            if not self.defer_resource_validation and not source.exists():
+                raise BundleError(f"bundle resource does not exist: {source}")
+            _bundle_target(resource.target)
+
+    def validate_resources(self) -> None:
+        """Require every declared file or directory to exist before building."""
+        for resource in (*self.datas, *self.binaries):
+            source = _inside(self.project_root, Path(resource.source), "resource")
+            if not source.exists():
+                raise BundleError(f"bundle resource does not exist: {source}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +346,7 @@ def build_bundle(spec: BundleSpec) -> BundleResult:
     installable artifacts should install ``spiritus[bundle]`` or provide their
     own pinned PyInstaller environment, as Persona does.
     """
+    spec.validate_resources()
     output_dir = spec.resolved_output_dir
     work_dir = spec.resolved_work_dir
     output_dir.mkdir(parents=True, exist_ok=True)
