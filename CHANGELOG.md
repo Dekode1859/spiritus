@@ -10,6 +10,8 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
+## [0.0.33] - 2026-08-11
+
 - Added opt-in application update support with GitHub and GitLab Releases,
   generic HTTPS JSON feeds, SemVer comparison, channel filtering, platform asset
   selection, checksum-verified staging, and explicit installer handoff. Apps
@@ -170,7 +172,8 @@ the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
 shell, OpenCode process lifecycle, storage primitives, provider abstraction,
 and shared chat UI.
 
-[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.32...HEAD
+[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.33...HEAD
+[0.0.33]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.33
 [0.0.32]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.32
 [0.0.31]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.31
 [0.3.1]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.3.1
