@@ -155,7 +155,12 @@ class BundleConfig:
         return tuple(item.format(**values) for item in command)
 
 
-def load_bundle_config(path: Path, *, project_root: Path | None = None) -> BundleConfig:
+def load_bundle_config(
+    path: Path,
+    *,
+    project_root: Path | None = None,
+    defer_resource_validation: bool = False,
+) -> BundleConfig:
     path = Path(path).resolve()
     if not path.is_file():
         raise BundleError(f"missing Spiritus bundle spec: {path}; run `spiritus bundle init`")
@@ -195,6 +200,7 @@ def load_bundle_config(path: Path, *, project_root: Path | None = None) -> Bundl
             console=bool(payload.get("console", False)),
             icon=payload.get("icon"),
             bundle_identifier=payload.get("bundle_identifier"),
+            defer_resource_validation=defer_resource_validation,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise BundleError(f"invalid bundle settings in {path}") from exc

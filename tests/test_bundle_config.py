@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+import spiritus.__main__ as cli
 from spiritus.__main__ import main as cli_main
 from spiritus.bundle_config import (
     init_bundle_config,
     load_bundle_config,
     render_platform_script,
 )
+from spiritus.bundling import BundleError
 
 
 def test_bundle_init_detects_project_metadata_and_generates_windows_script(tmp_path: Path):
@@ -65,6 +70,71 @@ verify = ["{bundle}/Example.exe", "--check-bundle"]
     assert config.spec.datas[0].target == "."
     assert config.spec.runtime_env_paths == {"BROWSER_PATH": "browsers"}
     assert config.commands("verify", "windows")[-1] == "--check-bundle"
+
+
+def test_prepare_hook_can_create_resources_before_build_validation(tmp_path: Path):
+    (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
+    config_path = tmp_path / "spiritus.bundle.toml"
+    config_path.write_text(
+        """format = 1
+platforms = ["windows"]
+entrypoint = "main.py"
+name = "Example"
+app_id = "example"
+datas = ["generated=generated"]
+binaries = []
+
+[hooks]
+prepare = ["python", "prepare.py"]
+""",
+        encoding="utf-8",
+    )
+
+    deferred = load_bundle_config(
+        config_path,
+        project_root=tmp_path,
+        defer_resource_validation=True,
+    )
+    assert deferred.spec.datas[0].source == "generated"
+    with pytest.raises(BundleError, match="bundle resource does not exist"):
+        deferred.spec.validate_resources()
+
+    (tmp_path / "generated").mkdir()
+    deferred.spec.validate_resources()
+
+
+def test_bundle_cli_runs_prepare_before_build_validation(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / "prepare.py").write_text(
+        "from pathlib import Path\nPath('generated').mkdir()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "spiritus.bundle.toml").write_text(
+        """format = 1
+platforms = ["windows", "macos"]
+entrypoint = "main.py"
+name = "Example"
+app_id = "example"
+datas = ["generated=generated"]
+
+[hooks]
+prepare = ["python", "prepare.py"]
+""",
+        encoding="utf-8",
+    )
+
+    def fake_build(spec):
+        spec.validate_resources()
+        return SimpleNamespace(
+            bundle_dir=tmp_path / "dist" / "Example",
+            manifest=tmp_path / "dist" / "spiritus-bundle.json",
+            spec_file=tmp_path / "dist" / "spiritus-bundle.spec",
+        )
+
+    monkeypatch.setattr(cli, "build_bundle", fake_build)
+    assert cli_main(["bundle", "--project-root", str(tmp_path)]) == 0
+    assert (tmp_path / "generated").is_dir()
 
 
 def test_bundle_init_cli_reports_created_files(tmp_path: Path, capsys):

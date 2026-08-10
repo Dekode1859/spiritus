@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 # Spiritus is both the distribution name and the import package name.
 name = "spiritus"
-version = "0.0.31"
+version = "0.0.32"
 description = "An SDK and runtime for building agent-powered desktop applications"
 readme = "README.md"
 license = "MIT"

@@ -164,7 +164,11 @@ def cmd_bundle(args) -> int:
         explicit = any((args.entrypoint, args.name, args.app_id))
         config = None
         if not explicit and config_file.is_file():
-            config = load_bundle_config(config_file, project_root=root)
+            config = load_bundle_config(
+                config_file,
+                project_root=root,
+                defer_resource_validation=True,
+            )
             if _platform_name() not in config.platforms:
                 raise BundleError(
                     f"bundle spec does not enable the current platform {_platform_name()!r}"
