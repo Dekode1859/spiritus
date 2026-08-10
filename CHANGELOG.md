@@ -10,6 +10,18 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
+## [0.0.34] - 2026-08-11
+
+### Added
+- Added declarative PyWebView window and rendering configuration plus a
+  runtime-owned window controller for desktop applications.
+
+### Fixed
+- Centralized desktop shutdown across window-close, `finally`, and `atexit`
+  paths, including explicit cleanup of the Spiritus UI server.
+- Windows engine-tree shutdown now uses the same hidden-console policy as
+  engine startup, preventing a terminal flash when applications close.
+
 ## [0.0.33] - 2026-08-11
 
 - Added opt-in application update support with GitHub and GitLab Releases,
@@ -172,7 +184,8 @@ the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
 shell, OpenCode process lifecycle, storage primitives, provider abstraction,
 and shared chat UI.
 
-[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.33...HEAD
+[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.34...HEAD
+[0.0.34]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.34
 [0.0.33]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.33
 [0.0.32]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.32
 [0.0.31]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.31

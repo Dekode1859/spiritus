@@ -16,6 +16,10 @@ env:
 jobs:
   platform-tests:
     name: Test (${{ matrix.os }}, Python 3.11–3.13)
+    # Pull requests get the full compatibility matrix. After a merge, the
+    # release workflow performs its own full verification when a version is
+    # being published; the post-merge CI job below checks the consumer path.
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -39,6 +43,7 @@ jobs:
 
   pytest:
     name: Basic pytest suite
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +55,8 @@ jobs:
 
   install-from-git:
     name: Install from git URL
+    # This is the intentional post-merge check: prove the merged commit can
+    # be installed and imported as an external consumer would.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
