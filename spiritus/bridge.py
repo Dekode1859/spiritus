@@ -38,6 +38,7 @@ from .runtime import paths
 from .runtime.client import OpenCodeClient
 from .runtime.server import OpenCodeServer
 from .runtime.subproc import python_c
+from .runtime.window import WindowController
 from .runtime.windows import hidden_console_kwargs
 
 
@@ -45,6 +46,7 @@ class Bridge:
     def __init__(self, config: AppConfig, server: OpenCodeServer):
         self._config = config
         self._server = server
+        self._window: WindowController | None = None
         self._project_root = paths.project_root(config.app_root, config.app_id)
         self._workspace = paths.workspace_path(
             config.app_root, config.app_id, config.workspace_dirname
@@ -52,6 +54,15 @@ class Bridge:
         # Ensure the app's declared folders exist (names come from the app).
         storage.ensure_dirs(self._workspace, config.folder_names())
         self._approval_audit = ApprovalAuditLog(self._project_root / ".spiritus")
+
+    def attach_window(self, window: WindowController) -> None:
+        """Attach the runtime-owned window after PyWebView creates it."""
+        self._window = window
+
+    @property
+    def window(self) -> WindowController | None:
+        """The application window, available after runtime startup."""
+        return self._window
 
     # ── Config ───────────────────────────────────────────────────────────────
     def get_config(self) -> dict:

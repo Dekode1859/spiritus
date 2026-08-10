@@ -15,6 +15,8 @@ def test_public_api_is_exactly_the_documented_surface():
         "AgentRuntime",
         "App",
         "AppConfig",
+        "WebViewConfig",
+        "WindowConfig",
         "BundleError",
         "BundleResource",
         "BundleResult",

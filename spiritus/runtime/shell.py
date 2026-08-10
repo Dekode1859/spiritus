@@ -20,8 +20,10 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import AppConfig
 from . import paths
+from .lifecycle import ShutdownCoordinator
 from .server import OpenCodeServer
 from .subproc import dispatch_child
+from .window import WindowController
 
 
 def _parse_multipart_files(body: bytes, content_type: str) -> list[tuple[str, bytes]]:
@@ -199,7 +201,27 @@ def _make_ui_handler(ui_dir: str, bridge):
     return NoCacheHandler
 
 
-def _start_ui_server(ui_dir: str, bridge) -> int:
+class _UiServer:
+    """Handle for the HTTP server owned by the Spiritus desktop shell."""
+
+    def __init__(self, server: http.server.ThreadingHTTPServer, thread: threading.Thread):
+        self.server = server
+        self.thread = thread
+        self.port = server.server_address[1]
+        self._stopped = False
+        self._lock = threading.Lock()
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+
+def _start_ui_server(ui_dir: str, bridge) -> _UiServer:
     """Serve the Spiritus UI over http://127.0.0.1 with no-cache headers.
 
     Serving over HTTP (not file://) makes WKWebView apply standard CORS to the
@@ -213,9 +235,9 @@ def _start_ui_server(ui_dir: str, bridge) -> int:
     NoCacheHandler = _make_ui_handler(ui_dir, bridge)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NoCacheHandler)
     server.daemon_threads = True
-    port = server.server_address[1]
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return _UiServer(server, thread)
 
 
 def run(config: AppConfig):
@@ -246,21 +268,22 @@ def run(config: AppConfig):
 
     from ..bridge import Bridge  # late import to avoid a cycle
 
+    lifecycle = ShutdownCoordinator()
+    atexit.register(lifecycle.stop_once)  # covers non-SIGKILL process exits
+
     _load_env(config)
     _set_app_name(config.app_title)
 
     proot = paths.project_root(config.app_root, config.app_id)
     tool_environment = tool_server.start() if tool_server is not None else {}
+    if tool_server is not None:
+        lifecycle.add(tool_server.stop)
     opencode = OpenCodeServer(
         proot,
         port_env_var=config.env_port_var,
         environment=tool_environment,
     )
-
-    def stop_services():
-        opencode.stop()
-        if tool_server is not None:
-            tool_server.stop()
+    lifecycle.add(opencode.stop)
 
     try:
         opencode.start()
@@ -269,25 +292,31 @@ def run(config: AppConfig):
         print("[spiritus] Continuing without OpenCode — chat will not function.",
               file=sys.stderr)
 
-    atexit.register(stop_services)  # covers Ctrl+C and any non-SIGKILL exit
-
     bridge_cls = config.bridge_cls or Bridge
     bridge = bridge_cls(config, opencode)
 
     # Serve the app's own UI if it provides one; otherwise the shared chat UI.
     ui_dir = str(config.ui_dir) if config.ui_dir else str(paths.resource_path("ui"))
-    ui_port = _start_ui_server(ui_dir, bridge)
+    ui_server = _start_ui_server(ui_dir, bridge)
+    ui_stop = getattr(ui_server, "stop", None)
+    if ui_stop is not None:
+        lifecycle.add(ui_stop)
+    ui_port = ui_server.port if hasattr(ui_server, "port") else ui_server
 
     window = webview.create_window(
         title=config.app_title,
         url=f"http://127.0.0.1:{ui_port}/index.html",
         js_api=bridge,
-        width=config.window_size[0],
-        height=config.window_size[1],
-        min_size=config.min_size,
+        **config.resolved_window().create_window_kwargs(),
     )
-    window.events.closed += lambda: stop_services()
+    if window is None:
+        raise RuntimeError("PyWebView did not create the application window")
+    window_controller = WindowController(window)
+    attach_window = getattr(bridge, "attach_window", None)
+    if attach_window is not None:
+        attach_window(window_controller)
+    window_controller.on("closed", lifecycle.stop_once)
     try:
-        webview.start(debug=False)
+        webview.start(**config.resolved_webview().start_kwargs())
     finally:
-        stop_services()  # catches KeyboardInterrupt / abrupt exits that skip events.closed
+        lifecycle.stop_once()  # catches KeyboardInterrupt / missed window events

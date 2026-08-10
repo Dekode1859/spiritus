@@ -131,3 +131,12 @@ git -c user.name="Dekode1859" -c user.email="prateekdwivedi30@gmail.com" commit 
 
 Keep commits focused and verify the test suite, lint, and build checks that are
 relevant to the change before committing.
+
+## Internal workstream and public naming
+
+Conversation labels such as a target release number are planning context used
+to keep work aligned. Do not automatically copy those labels into branch
+names, commit messages, pull-request titles or bodies, or other public
+metadata. Public artifacts should describe the behavior and user-visible
+purpose of the change. Include a release number publicly only when the user
+explicitly asks for it or when the repository's release workflow requires it.

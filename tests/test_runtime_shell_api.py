@@ -224,5 +224,24 @@ def test_desktop_shell_starts_python_tool_adapter_for_full_app(tmp_path, monkeyp
     assert opencode.stopped is True
 
 
+def test_ui_server_handle_stops_its_thread_and_socket(tmp_path):
+    ui_dir = tmp_path / "ui"
+    ui_dir.mkdir()
+    (ui_dir / "index.html").write_text("<title>Probe</title>", encoding="utf-8")
+
+    handle = shell._start_ui_server(str(ui_dir), FakeBridge())
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", handle.port, timeout=5)
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        assert response.status == 200
+        connection.close()
+    finally:
+        handle.stop()
+        handle.stop()
+
+    assert not handle.thread.is_alive()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
