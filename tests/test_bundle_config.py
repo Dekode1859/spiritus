@@ -104,6 +104,7 @@ prepare = ["python", "prepare.py"]
 
 
 def test_bundle_cli_runs_prepare_before_build_validation(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cli, "_platform_name", lambda: "windows")
     (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
     (tmp_path / "prepare.py").write_text(
         "from pathlib import Path\nPath('generated').mkdir()\n",
