@@ -49,7 +49,10 @@ def test_windows_engine_tree_shutdown_uses_hidden_console_options(monkeypatch, t
     from spiritus.runtime.server import OpenCodeServer
 
     calls = {}
-    monkeypatch.setattr(server_module.os, "name", "nt")
+    # Replace only the server module's reference. Mutating the shared ``os``
+    # module would make pathlib construct WindowsPath objects on Unix runners
+    # during pytest cleanup.
+    monkeypatch.setattr(server_module, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(
         server_module,
         "hidden_console_kwargs",
