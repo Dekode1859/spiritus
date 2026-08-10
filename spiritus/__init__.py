@@ -27,7 +27,7 @@ from .bundling import (
     check_bundle,
 )
 from .commands import Command
-from .config import AppConfig, WorkspaceFolder
+from .config import AppConfig, WebViewConfig, WindowConfig, WorkspaceFolder
 from .events import (
     ApprovalRequested,
     ApprovalResolved,
@@ -93,6 +93,8 @@ __all__ = [
     "AgentRuntime",
     "App",
     "AppConfig",
+    "WebViewConfig",
+    "WindowConfig",
     "BundleError",
     "BundleResource",
     "BundleResult",

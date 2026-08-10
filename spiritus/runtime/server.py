@@ -228,6 +228,7 @@ class OpenCodeServer:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                 capture_output=True, check=False,
+                **hidden_console_kwargs(),
             )
             return
         try:
