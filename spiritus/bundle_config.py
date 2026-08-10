@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .bundling import BundleError, BundleResource, BundleSpec
+from .updates import UpdateConfig
 
 CONFIG_NAME = "spiritus.bundle.toml"
 SUPPORTED_PLATFORMS = ("windows", "macos")
@@ -117,6 +118,7 @@ class BundleConfig:
     verify: tuple[str, ...] = ()
     installer: tuple[str, ...] = ()
     platform_hooks: dict[str, dict[str, tuple[str, ...]]] | None = None
+    updates: UpdateConfig | None = None
 
     def _bundle_dir_for(self, platform: str) -> Path:
         suffix = ".app" if platform == "macos" else ""
@@ -220,6 +222,16 @@ def load_bundle_config(
             kind: _command(values.get(kind), f"hooks.{platform}.{kind}")
             for kind in ("prepare", "verify", "installer")
         }
+    updates = None
+    if payload.get("updates") is not None:
+        try:
+            updates = UpdateConfig.from_mapping(
+                payload["updates"],
+                app_id=spec.app_id,
+                current_version=spec.version,
+            )
+        except (TypeError, ValueError) as exc:
+            raise BundleError(f"invalid updates settings in {path}") from exc
     return BundleConfig(
         path=path,
         project_root=root,
@@ -229,6 +241,7 @@ def load_bundle_config(
         verify=_command(hooks.get("verify"), "hooks.verify"),
         installer=_command(hooks.get("installer"), "hooks.installer"),
         platform_hooks=platform_hooks,
+        updates=updates,
     )
 
 
@@ -277,6 +290,17 @@ def render_config(
         "# prepare = [\"uv\", \"run\", \"python\", \"packaging/prepare-assets.py\"]",
         "# verify = [\"{bundle}/MyApp.exe\", \"--check-bundle\"]",
         "# installer = [\"iscc\", \"packaging/MyApp.iss\"]",
+        "",
+        "# Optional check-only update discovery.",
+        "# [updates]",
+        "# enabled = true",
+        "# channel = \"stable\"",
+        "# versioning = \"semver\"",
+        "# [updates.source]",
+        "# type = \"github\"",
+        "# repository = \"owner/repository\"",
+        "# [updates.assets]",
+        "# windows_x86_64 = \"MyApp-Setup-{version}.exe\"",
         "",
     ])
     return "\n".join(lines)

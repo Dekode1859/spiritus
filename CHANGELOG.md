@@ -10,7 +10,9 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
-No unreleased changes.
+- Added opt-in, check-only application update discovery with GitHub Releases,
+  generic HTTPS JSON feeds, SemVer comparison, channel filtering, and platform
+  asset selection. Downloads and installers remain application-owned.
 
 ## [0.0.32] - 2026-08-10
 

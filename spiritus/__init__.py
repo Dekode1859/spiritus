@@ -61,6 +61,22 @@ from .sessions import (
 )
 from .skills import Skill
 from .tools import Tool, ToolContext
+from .updates import (
+    GitHubReleaseSource,
+    JsonFeedSource,
+    ReleaseCandidate,
+    ReleaseSource,
+    SemVerPolicy,
+    UpdateArtifact,
+    UpdateCheck,
+    UpdateClient,
+    UpdateConfig,
+    UpdateConfigurationError,
+    UpdateError,
+    UpdateSourceError,
+    UpdateStatus,
+    VersionPolicy,
+)
 from .workspace import Workspace, WorkspaceAccess
 
 __all__ = [
@@ -106,6 +122,20 @@ __all__ = [
     "WorkspaceFolder",
     "Workspace",
     "WorkspaceAccess",
+    "GitHubReleaseSource",
+    "JsonFeedSource",
+    "ReleaseCandidate",
+    "ReleaseSource",
+    "SemVerPolicy",
+    "UpdateArtifact",
+    "UpdateCheck",
+    "UpdateClient",
+    "UpdateConfig",
+    "UpdateConfigurationError",
+    "UpdateError",
+    "UpdateSourceError",
+    "UpdateStatus",
+    "VersionPolicy",
     "build_bundle",
     "check_bundle",
     "run",

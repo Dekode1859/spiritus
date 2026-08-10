@@ -124,6 +124,14 @@ signing, notarization, and CI policy remain application-owned; generated
 wrappers can invoke an optional installer hook when the application declares
 one.
 
+### Update discovery
+
+Opt-in check-only update discovery is available through `spiritus.updates`. It
+supports GitHub Releases and a provider-neutral HTTPS JSON feed; applications
+control the trigger and still own download, installer, signing, and restart
+policy. See [docs/updates.md](docs/updates.md) for the TOML schema and private
+release guidance.
+
 ## The execution engine
 
 Spiritus hosts [OpenCode](https://opencode.ai) as its execution engine. The

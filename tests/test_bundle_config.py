@@ -72,6 +72,39 @@ verify = ["{bundle}/Example.exe", "--check-bundle"]
     assert config.commands("verify", "windows")[-1] == "--check-bundle"
 
 
+def test_bundle_spec_round_trips_generic_update_source(tmp_path: Path):
+    (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
+    config_path = tmp_path / "spiritus.bundle.toml"
+    config_path.write_text(
+        """format = 1
+platforms = ["windows"]
+entrypoint = "main.py"
+name = "Example"
+app_id = "example"
+version = "1.0.0"
+
+[updates]
+channel = "stable"
+versioning = "semver"
+
+[updates.source]
+type = "json"
+url = "https://downloads.example.test/stable.json"
+
+[updates.assets]
+windows_x86_64 = "Example-{version}.exe"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_bundle_config(config_path, project_root=tmp_path)
+
+    assert config.updates is not None
+    assert config.updates.app_id == "example"
+    assert config.updates.current_version == "1.0.0"
+    assert config.updates.asset_patterns["windows_x86_64"] == "Example-{version}.exe"
+
+
 def test_prepare_hook_can_create_resources_before_build_validation(tmp_path: Path):
     (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
     config_path = tmp_path / "spiritus.bundle.toml"
