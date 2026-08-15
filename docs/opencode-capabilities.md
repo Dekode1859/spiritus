@@ -451,7 +451,7 @@ permission response endpoints, or translate model/provider IDs.
 | Providers | Explicit `Model`, catalog/model preflight, existing auth helpers | Profiles, aliases, provider policy, and credential UX |
 | MCP | Managed local `MCPServer`, environment/timeout/policy, connection preflight, real stdio fixture call | Remote/OAuth abstractions, secrets UX, reconnect controls, and richer status events |
 | Sessions/events | Typed session/run/result APIs; normalized text/tool/approval lifecycle; bridge/UI no longer consumes raw OpenCode events | More OpenCode operations such as summarize/revert/diff only when product flows require them |
-| Structured output | `OutputSchema`, decoding, Python revalidation, typed errors, normalized fallback persistence | Remove the compatibility fallback after upgrading beyond the pinned history defect |
+| Structured output | `OutputSchema`, decoding, Python revalidation, typed errors, and async completion capture | Remove compatibility fallbacks after upgrading beyond the pinned history defect |
 | Workspace safety | Empty engine worktree plus exact named external-folder policies; allow/deny/ask live proof | Read/write combinations beyond the first safe file flow and OS-level sandboxing where available |
 | Regression validation | 263 collected tests, six real-engine contracts, and nine real-model live scenarios | Add scheduled CI credentials and an installed/frozen application layer |
 | Packaging | Manifest-driven one-folder PyInstaller bundle and bundle manifest | Native installer, signing, and installed-application parity |
@@ -472,7 +472,7 @@ promise that a service-controlled model catalog will never change.
 | Visible-output filtering | Raw deltas included reasoning text as well as the final text | Event normalization must correlate part types and must test that reasoning never leaks into the public text stream |
 | Restart, resume, and memory | Pass: after stop/start, the same session ID was listed; a follow-up returned the remembered codeword; history held both turns | G1 must recreate the runtime object, not merely reuse an in-memory client, when testing persistence |
 | Structured direct result | Pass: the direct response contained `{"status": "STRUCTURED_OK", "count": 7}` | G2 can normalize the engine's `structured` field |
-| Structured history | Engine defect confirmed: after a successful schema result, `GET /session/:id/message` returned `400` with an `OutputFormatJsonSchema` validation error | G2 now stores normalized input/result pairs app-locally and falls back to that record when this pinned endpoint fails |
+| Structured history | Engine defect confirmed: after a successful schema result, `GET /session/:id/message` returned `400` with an `OutputFormatJsonSchema` validation error | Async bridge runs capture the structured value in the completion SSE event and never query history to recover it |
 | Windows data isolation | Root cause confirmed: setting only `HOME` left `.opencode-home` empty; adding `USERPROFILE` and explicit XDG paths redirected all persistent locations | The runtime now applies and tests all of those variables before starting OpenCode |
 
 ### Additional implementation findings

@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from spiritus import bridge as bridge_mod  # noqa: E402
 from spiritus.bridge import Bridge  # noqa: E402
 from spiritus.config import AppConfig, WorkspaceFolder  # noqa: E402
+from spiritus.tracing import FailureKind, RunStatus  # noqa: E402
 
 
 class FakeServer:
@@ -79,6 +80,9 @@ class FakeOpenCodeClient:
         self.port = port
         self.async_calls = []
         self.deleted = []
+        self.messages_calls = 0
+        self.completed_structured = None
+        self.history_error = False
 
     def agents(self):
         return [
@@ -93,6 +97,9 @@ class FakeOpenCodeClient:
         return {"id": "ses_2", "title": body.get("title", "")}
 
     def messages(self, session_id):
+        self.messages_calls += 1
+        if self.history_error:
+            raise RuntimeError("OutputFormatJsonSchema history defect")
         return [{
             "info": {"id": "msg_1", "sessionID": session_id, "role": "assistant"},
             "parts": [{"type": "text", "text": "hello"}],
@@ -114,6 +121,21 @@ class FakeOpenCodeClient:
                 "properties": {"sessionID": "ses_1", "status": {"type": "busy"}},
             }
         }
+        if self.completed_structured is not None:
+            yield {
+                "payload": {
+                    "type": "message.updated",
+                    "properties": {
+                        "info": {
+                            "id": "msg_1",
+                            "sessionID": "ses_1",
+                            "role": "assistant",
+                            "time": {"completed": 1},
+                            "structured": self.completed_structured,
+                        }
+                    },
+                }
+            }
         yield {
             "payload": {
                 "type": "session.idle",
@@ -145,10 +167,10 @@ class TestAgentSessions(BridgeTestBase):
         self.assertEqual(self.client.deleted, ["ses_1"])
 
     def test_prompt_omits_unspecified_model_instead_of_sending_null(self):
-        self.assertEqual(
-            self.bridge.send_message("ses_1", "declared", None, " hello "),
-            {"ok": True},
-        )
+        result = self.bridge.send_message("ses_1", "declared", None, " hello ")
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["session_id"], "ses_1")
+        self.assertTrue(result["run_id"].startswith("run_"))
         _, body = self.client.async_calls[0]
         self.assertNotIn("model", body)
         self.assertEqual(body["parts"][0]["text"], "hello")
@@ -161,6 +183,53 @@ class TestAgentSessions(BridgeTestBase):
                 {"type": "run.idle", "session_id": "ses_1"},
             ],
         )
+
+    def test_bridge_operation_creates_a_failed_contract_record(self):
+        started = self.bridge.agent_run(
+            "ses_1",
+            "declared",
+            None,
+            "extract the profile",
+            operation="profile.import",
+            output_schema={"type": "object"},
+        )
+
+        events = list(self.bridge.session_events("ses_1"))
+        record = self.bridge._runs.get(started["run_id"])
+        self.assertEqual(events[0]["run_id"], started["run_id"])
+        self.assertEqual(record.status, RunStatus.FAILED)
+        self.assertEqual(record.failure.kind, FailureKind.OUTPUT_PARSE_FAILED)
+        self.assertEqual(record.failure.owner, "application_contract")
+
+    def test_bridge_uses_structured_completion_without_history_recovery(self):
+        self.client.completed_structured = {"status": "ok"}
+        self.client.history_error = True
+        started = self.bridge.agent_run(
+            "ses_1",
+            "declared",
+            None,
+            "extract the profile",
+            operation="profile.import",
+            output_schema={
+                "type": "object",
+                "properties": {"status": {"const": "ok"}},
+                "required": ["status"],
+                "additionalProperties": False,
+            },
+        )
+
+        events = list(self.bridge.session_events("ses_1"))
+        record = self.bridge._runs.get(started["run_id"])
+        self.assertEqual(events[-1]["type"], "run.idle")
+        self.assertEqual(record.status, RunStatus.COMPLETED)
+        self.assertEqual(self.client.messages_calls, 0)
+        self.assertEqual(
+            self.bridge._runs.artifact(started["run_id"], "agent.output"),
+            '{"status": "ok"}',
+        )
+        history = self.bridge.session_history("ses_1")
+        self.assertEqual(history[-1]["info"]["structured"], {"status": "ok"})
+        self.assertEqual(self.client.messages_calls, 1)
 
     def test_permission_reply_is_validated_and_relayed(self):
         self.assertEqual(

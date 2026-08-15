@@ -10,6 +10,11 @@ to forward — it never branches on what the app *is*.
 """
 from __future__ import annotations
 
+import json
+import threading
+import uuid
+
+import jsonschema
 import webview
 
 from . import agents as agents_mod
@@ -40,10 +45,22 @@ from .runtime.server import OpenCodeServer
 from .runtime.subproc import python_c
 from .runtime.window import WindowController
 from .runtime.windows import hidden_console_kwargs
+from .tracing import (
+    Diagnostics,
+    FailureKind,
+    FailureLayer,
+    RunFailure,
+    TraceKind,
+)
 
 
 class Bridge:
-    def __init__(self, config: AppConfig, server: OpenCodeServer):
+    def __init__(
+        self,
+        config: AppConfig,
+        server: OpenCodeServer,
+        diagnostics: Diagnostics | None = None,
+    ):
         self._config = config
         self._server = server
         self._window: WindowController | None = None
@@ -54,6 +71,13 @@ class Bridge:
         # Ensure the app's declared folders exist (names come from the app).
         storage.ensure_dirs(self._workspace, config.folder_names())
         self._approval_audit = ApprovalAuditLog(self._project_root / ".spiritus")
+        self.diagnostics = diagnostics or Diagnostics(
+            self._project_root / ".spiritus", config.diagnostic_policy
+        )
+        self._traces = self.diagnostics.traces
+        self._runs = self.diagnostics.runs
+        self._ui_runs: dict[str, dict] = {}
+        self._ui_runs_lock = threading.RLock()
 
     def attach_window(self, window: WindowController) -> None:
         """Attach the runtime-owned window after PyWebView creates it."""
@@ -103,7 +127,93 @@ class Bridge:
         return self._opencode().create_session(body)
 
     def session_history(self, session_id: str) -> list[dict]:
-        return self._opencode().messages(session_id)
+        try:
+            return self._opencode().messages(session_id)
+        except Exception:
+            structured = self._latest_structured_result(session_id)
+            if structured is None:
+                raise
+            # OpenCode 1.18.13 rejects a history read after a json_schema
+            # completion. Preserve the established bridge contract with the
+            # locally retained final result rather than making an application
+            # interpret an engine transport defect.
+            return [{
+                "info": {
+                    "id": "local_structured_result",
+                    "sessionID": session_id,
+                    "role": "assistant",
+                    "structured": structured,
+                },
+                "parts": [{"type": "text", "text": json.dumps(structured)}],
+            }]
+
+    def run_artifact(self, run_id: str, name: str) -> object:
+        """Return one locally retained result artifact for a durable bridge run."""
+        return self._runs.artifact(run_id, name)
+
+    def run_checkpoint(
+        self, run_id: str, name: str, detail: dict | None = None
+    ) -> dict:
+        """Record an application-owned checkpoint on a bridge run."""
+        record = self._runs.get(run_id)
+        updated = self._runs.checkpoint(run_id, name, detail=detail or {})
+        self._traces.append(
+            TraceKind.RUN_CHECKPOINT,
+            run_id=run_id,
+            session_id=record.session_id,
+            agent=record.agent,
+            model=record.model,
+            data={"name": name, "detail": detail or {}},
+        )
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "name": name,
+            "status": updated.status.value,
+        }
+
+    def run_failure(
+        self,
+        run_id: str,
+        kind: str,
+        owner: str,
+        message: str,
+        stage: str,
+        field_paths: list[str] | None = None,
+    ) -> dict:
+        """Record a failure discovered by application post-processing."""
+        record = self._runs.get(run_id)
+        if record.status.value != "completed":
+            return {
+                "ok": False,
+                "run_id": run_id,
+                "status": record.status.value,
+                "error": "Run already has a terminal status",
+            }
+        failure = RunFailure(
+            FailureKind(kind), owner, message, tuple(field_paths or ())
+        )
+        self._runs.fail(run_id, failure, stage=stage)
+        self._traces.append(
+            TraceKind.RUN_FAILED,
+            run_id=run_id,
+            session_id=record.session_id,
+            agent=record.agent,
+            model=record.model,
+            failure_layer=(
+                FailureLayer.OUTPUT
+                if "output" in failure.kind.value
+                else FailureLayer.RUNTIME
+            ),
+            data={
+                "message": failure.message,
+                "owner": failure.owner,
+                "kind": failure.kind.value,
+                "field_paths": list(failure.field_paths),
+                "stage": stage,
+            },
+        )
+        return {"ok": True, "run_id": run_id, "status": "failed"}
 
     def delete_session(self, session_id: str) -> dict:
         self._opencode().delete_session(session_id)
@@ -116,25 +226,103 @@ class Bridge:
         model: dict | None,
         text: str,
     ) -> dict:
+        return self.agent_run(
+            session_id,
+            agent,
+            model,
+            text,
+            operation="chat.message",
+        )
+
+    def agent_run(
+        self,
+        session_id: str,
+        agent: str,
+        model: dict | None,
+        text: str,
+        *,
+        operation: str,
+        output_schema: dict | None = None,
+    ) -> dict:
+        """Start one bridge-originated agent operation with a durable run ID."""
         prompt = text.strip()
         if not prompt:
             raise ValueError("message cannot be empty")
+        selected_agent = agent or self._config.default_agent
+        raw_model = model or {}
+        model_name = "/".join(
+            filter(None, [raw_model.get("providerID"), raw_model.get("modelID")])
+        )
+        run_id = f"run_{uuid.uuid4().hex}"
+        self._runs.create(
+            run_id=run_id,
+            operation=operation,
+            session_id=session_id,
+            agent=selected_agent,
+            model=model_name,
+        )
+        self._traces.append(
+            TraceKind.RUN_STARTED,
+            run_id=run_id,
+            session_id=session_id,
+            agent=selected_agent,
+            model=model_name,
+        )
+        self._traces.append(
+            TraceKind.MODEL_REQUESTED,
+            run_id=run_id,
+            session_id=session_id,
+            agent=selected_agent,
+            model=model_name,
+            data={"mode": "bridge", "prompt": prompt},
+        )
         body = {"parts": [{"type": "text", "text": prompt}]}
-        if agent:
-            body["agent"] = agent
+        if selected_agent:
+            body["agent"] = selected_agent
         if model:
             body["model"] = model
-        self._opencode().prompt_async(session_id, body)
-        return {"ok": True}
+        if output_schema is not None:
+            body["format"] = {"type": "json_schema", "schema": output_schema}
+        with self._ui_runs_lock:
+            if session_id in self._ui_runs:
+                raise RuntimeError(f"session {session_id!r} already has an active bridge run")
+            self._ui_runs[session_id] = {
+                "run_id": run_id,
+                "session_id": session_id,
+                "agent": selected_agent,
+                "model": model_name,
+                "output_schema": output_schema,
+                "structured": None,
+                "text_parts": {},
+                "completed_message_ids": set(),
+            }
+        try:
+            self._opencode().prompt_async(session_id, body)
+        except BaseException as exc:
+            self._finish_bridge_failure(
+                session_id,
+                RunFailure(FailureKind.ENGINE_UNAVAILABLE, "engine", str(exc)),
+                "agent.requested",
+            )
+            try:
+                exc.run_id = run_id
+            except (AttributeError, TypeError):
+                pass
+            raise
+        return {"ok": True, "run_id": run_id, "session_id": session_id}
 
     def session_events(self, session_id: str):
         """Yield normalized, JSON-safe events for the same-origin UI SSE route."""
         normalizer = EventNormalizer(session_id)
         for envelope in self._opencode().events():
             for event in normalizer.feed(envelope):
+                state = self._bridge_run(session_id)
                 if isinstance(event, RunStarted):
-                    yield {"type": "run.started", "session_id": session_id}
+                    if state:
+                        self._bridge_checkpoint(state, "agent.started")
+                    yield self._with_run_id({"type": "run.started", "session_id": session_id}, state)
                 elif isinstance(event, TextDelta):
+                    self._record_bridge_text(session_id, event.part_id, event.text)
                     yield {
                         "type": "text.delta",
                         "session_id": session_id,
@@ -152,6 +340,17 @@ class Bridge:
                         metadata=event.metadata,
                         always=list(event.always),
                     )
+                    if state:
+                        self._traces.append(
+                            TraceKind.APPROVAL_REQUESTED,
+                            run_id=state["run_id"],
+                            session_id=session_id,
+                            agent=state["agent"],
+                            model=state["model"],
+                            message_id=event.message_id,
+                            call_id=event.call_id,
+                            data={"permission": event.permission, "patterns": event.patterns},
+                        )
                     yield {
                         "type": "approval.requested",
                         "session_id": session_id,
@@ -168,6 +367,15 @@ class Bridge:
                         request_id=event.request_id,
                         decision=event.decision.value,
                     )
+                    if state:
+                        self._traces.append(
+                            TraceKind.APPROVAL_RESOLVED,
+                            run_id=state["run_id"],
+                            session_id=session_id,
+                            agent=state["agent"],
+                            model=state["model"],
+                            data={"request_id": event.request_id, "decision": event.decision.value},
+                        )
                     yield {
                         "type": "approval.resolved",
                         "session_id": session_id,
@@ -175,6 +383,7 @@ class Bridge:
                         "decision": event.decision.value,
                     }
                 elif isinstance(event, TextSnapshot):
+                    self._replace_bridge_text(session_id, event.part_id, event.text)
                     yield {
                         "type": "text.snapshot",
                         "session_id": session_id,
@@ -183,6 +392,7 @@ class Bridge:
                         "text": event.text,
                     }
                 elif isinstance(event, ToolStarted):
+                    self._trace_bridge_tool(state, TraceKind.TOOL_STARTED, event)
                     yield {
                         "type": "tool.started",
                         "session_id": session_id,
@@ -193,6 +403,7 @@ class Bridge:
                         "arguments": event.arguments,
                     }
                 elif isinstance(event, ToolProgress):
+                    self._trace_bridge_tool(state, TraceKind.TOOL_PROGRESS, event)
                     yield {
                         "type": "tool.progress",
                         "session_id": session_id,
@@ -204,6 +415,7 @@ class Bridge:
                         "metadata": event.metadata,
                     }
                 elif isinstance(event, ToolCompleted):
+                    self._trace_bridge_tool(state, TraceKind.TOOL_COMPLETED, event)
                     yield {
                         "type": "tool.completed",
                         "session_id": session_id,
@@ -214,6 +426,7 @@ class Bridge:
                         "output": event.output,
                     }
                 elif isinstance(event, ToolFailed):
+                    self._trace_bridge_tool(state, TraceKind.TOOL_FAILED, event)
                     yield {
                         "type": "tool.failed",
                         "session_id": session_id,
@@ -224,21 +437,214 @@ class Bridge:
                         "error": event.error,
                     }
                 elif isinstance(event, RunCompleted):
+                    state, first_completion = self._record_bridge_completion(session_id, event)
+                    if state and first_completion:
+                        self._bridge_checkpoint(state, "agent.completed")
+                        self._traces.append(
+                            TraceKind.MODEL_COMPLETED,
+                            run_id=state["run_id"],
+                            session_id=session_id,
+                            agent=state["agent"],
+                            model=state["model"],
+                            message_id=event.message_id,
+                        )
                     yield {
                         "type": "run.completed",
                         "session_id": session_id,
                         "message_id": event.message_id,
+                        **({"run_id": state["run_id"]} if state else {}),
                     }
                 elif isinstance(event, RunFailed):
+                    if state:
+                        self._finish_bridge_failure(
+                            session_id,
+                            RunFailure(FailureKind.MODEL_FAILED, "model", event.message),
+                            "agent.completed",
+                        )
                     yield {
                         "type": "run.failed",
                         "session_id": session_id,
                         "message": event.message,
+                        **({"run_id": state["run_id"]} if state else {}),
                     }
                     return
                 elif isinstance(event, RunIdle):
-                    yield {"type": "run.idle", "session_id": session_id}
+                    if state:
+                        self._finish_bridge_success(session_id)
+                    yield self._with_run_id({"type": "run.idle", "session_id": session_id}, state)
                     return
+
+    def _bridge_run(self, session_id: str) -> dict | None:
+        with self._ui_runs_lock:
+            state = self._ui_runs.get(session_id)
+            return dict(state) if state else None
+
+    def _record_bridge_text(self, session_id: str, part_id: str, text: str) -> None:
+        with self._ui_runs_lock:
+            state = self._ui_runs.get(session_id)
+            if state is not None:
+                parts = state["text_parts"]
+                parts[part_id] = parts.get(part_id, "") + text
+
+    def _replace_bridge_text(self, session_id: str, part_id: str, text: str) -> None:
+        with self._ui_runs_lock:
+            state = self._ui_runs.get(session_id)
+            if state is not None:
+                state["text_parts"][part_id] = text
+
+    def _record_bridge_completion(
+        self, session_id: str, event: RunCompleted
+    ) -> tuple[dict | None, bool]:
+        with self._ui_runs_lock:
+            state = self._ui_runs.get(session_id)
+            if state is None:
+                return None, False
+            if event.structured is not None:
+                state["structured"] = event.structured
+            completed = state["completed_message_ids"]
+            first_completion = event.message_id not in completed
+            completed.add(event.message_id)
+            return dict(state), first_completion
+
+    @staticmethod
+    def _with_run_id(payload: dict, state: dict | None) -> dict:
+        return {**payload, **({"run_id": state["run_id"]} if state else {})}
+
+    def _trace_bridge_tool(self, state: dict | None, kind: TraceKind, event) -> None:
+        if state is None:
+            return
+        data = {"tool": event.tool}
+        if isinstance(event, ToolStarted):
+            data["arguments"] = event.arguments
+        elif isinstance(event, ToolProgress):
+            data.update({"title": event.title, "metadata": event.metadata})
+        elif isinstance(event, ToolCompleted):
+            data.update({"output": event.output, "metadata": event.metadata})
+        else:
+            data.update({"error": event.error, "metadata": event.metadata})
+        self._traces.append(
+            kind,
+            run_id=state["run_id"],
+            session_id=event.session_id,
+            agent=state["agent"],
+            model=state["model"],
+            message_id=event.message_id,
+            call_id=event.call_id,
+            failure_layer=FailureLayer.TOOL if kind is TraceKind.TOOL_FAILED else None,
+            data=data,
+        )
+
+    def _bridge_checkpoint(
+        self, state: dict, name: str, *, detail: dict | None = None
+    ) -> None:
+        checkpoint_detail = detail or {}
+        self._runs.checkpoint(state["run_id"], name, detail=checkpoint_detail)
+        self._traces.append(
+            TraceKind.RUN_CHECKPOINT,
+            run_id=state["run_id"],
+            session_id=state["session_id"],
+            agent=state["agent"],
+            model=state["model"],
+            data={"name": name, "detail": checkpoint_detail},
+        )
+
+    def _finish_bridge_success(self, session_id: str) -> None:
+        state = self._bridge_run(session_id)
+        if state is None:
+            return
+        run_id = state["run_id"]
+        try:
+            output = "".join(state["text_parts"].values())
+            schema = state["output_schema"]
+            structured = None
+            if schema is not None:
+                structured = state["structured"]
+                source = "completion_stream"
+                if structured is None:
+                    try:
+                        structured = json.loads(output)
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        raise ValueError(
+                            "OpenCode returned no structured output in the completion stream"
+                        ) from exc
+                    source = "visible_text"
+                self._bridge_checkpoint(state, "output.parsed", detail={"source": source})
+                jsonschema.validate(structured, schema)
+                self._bridge_checkpoint(state, "output.validated")
+                if not output:
+                    output = json.dumps(structured, ensure_ascii=False)
+            artifacts = {"agent.output": output}
+            if structured is not None:
+                artifacts["agent.structured"] = structured
+            self._runs.complete(run_id, artifacts=artifacts)
+            self._traces.append(
+                TraceKind.RUN_COMPLETED,
+                run_id=run_id,
+                session_id=session_id,
+                agent=state["agent"],
+                model=state["model"],
+            )
+        except jsonschema.ValidationError as exc:
+            self._finish_bridge_failure(
+                session_id,
+                RunFailure(
+                    FailureKind.OUTPUT_SCHEMA_INVALID,
+                    "application_contract",
+                    str(exc),
+                    (self._field_path(exc.absolute_path),),
+                ),
+                "output.validated",
+            )
+        except ValueError as exc:
+            self._finish_bridge_failure(
+                session_id,
+                RunFailure(FailureKind.OUTPUT_PARSE_FAILED, "application_contract", str(exc)),
+                "output.parsed",
+            )
+        except BaseException as exc:
+            self._finish_bridge_failure(
+                session_id,
+                RunFailure(FailureKind.ENGINE_UNAVAILABLE, "engine", str(exc)),
+                "agent.completed",
+            )
+        finally:
+            with self._ui_runs_lock:
+                self._ui_runs.pop(session_id, None)
+
+    def _finish_bridge_failure(self, session_id: str, failure: RunFailure, stage: str) -> None:
+        state = self._bridge_run(session_id)
+        if state is None:
+            return
+        self._runs.fail(state["run_id"], failure, stage=stage)
+        self._traces.append(
+            TraceKind.RUN_FAILED,
+            run_id=state["run_id"],
+            session_id=session_id,
+            agent=state["agent"],
+            model=state["model"],
+            failure_layer=FailureLayer.OUTPUT if "output" in failure.kind.value else FailureLayer.MODEL,
+            data={"message": failure.message, "field_paths": failure.field_paths},
+        )
+        with self._ui_runs_lock:
+            self._ui_runs.pop(session_id, None)
+
+    def _latest_structured_result(self, session_id: str) -> object | None:
+        matches = [
+            record
+            for record in self._runs.list()
+            if record.session_id == session_id and "agent.structured" in record.artifacts
+        ]
+        if not matches:
+            return None
+        latest = max(matches, key=lambda record: record.completed_at or record.started_at)
+        return latest.artifacts["agent.structured"]
+
+    @staticmethod
+    def _field_path(path) -> str:
+        value = ""
+        for item in path:
+            value += f"[{item}]" if isinstance(item, int) else f".{item}"
+        return value.lstrip(".") or "<root>"
 
     def reply_permission(
         self,

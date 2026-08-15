@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .tracing import DiagnosticPolicy
+
 
 @dataclass(frozen=True)
 class WorkspaceFolder:
@@ -130,6 +132,7 @@ class AppConfig:
     workspace_folders: tuple[WorkspaceFolder, ...] = ()  # taxonomy (application-defined)
     default_capture_folder: str = ""              # where ad-hoc input is written
     default_agent: str = ""                       # agent selected on launch
+    diagnostic_policy: DiagnosticPolicy = field(default_factory=DiagnosticPolicy)
 
     window_size: tuple[int, int] = (1440, 900)
     min_size: tuple[int, int] = (900, 600)
@@ -143,6 +146,8 @@ class AppConfig:
 
     def __post_init__(self):
         self.app_root = Path(self.app_root)
+        if not isinstance(self.diagnostic_policy, DiagnosticPolicy):
+            raise TypeError("diagnostic_policy must be a DiagnosticPolicy value")
         if self.ui_dir is not None:
             ui = Path(self.ui_dir)
             # Resolve a relative ui_dir against the app root.
