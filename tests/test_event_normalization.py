@@ -26,10 +26,12 @@ def event(event_type: str, **properties) -> dict:
     return {"payload": {"type": event_type, "properties": properties}}
 
 
-def assistant_role(*, completed: bool = False) -> dict:
+def assistant_role(*, completed: bool = False, structured=None) -> dict:
     info = {"id": MESSAGE, "sessionID": SESSION, "role": "assistant", "time": {}}
     if completed:
         info["time"]["completed"] = 1
+    if structured is not None:
+        info["structured"] = structured
     return event("message.updated", info=info)
 
 
@@ -91,6 +93,15 @@ def test_emits_lifecycle_and_visible_text_without_reasoning():
     ]
     assert reducer.feed(assistant_role(completed=True)) == [RunCompleted(SESSION, MESSAGE)]
     assert reducer.feed(event("session.idle", sessionID=SESSION)) == [RunIdle(SESSION)]
+
+
+def test_completion_carries_structured_output_from_the_transport():
+    reducer = EventNormalizer(SESSION)
+    structured = {"status": "ok", "count": 7}
+
+    assert reducer.feed(assistant_role(completed=True, structured=structured)) == [
+        RunCompleted(SESSION, MESSAGE, structured)
+    ]
 
 
 def test_authoritative_snapshots_do_not_duplicate_seen_deltas():

@@ -37,6 +37,7 @@ class TextSnapshot(RunEvent):
 @dataclass(frozen=True, slots=True)
 class RunCompleted(RunEvent):
     message_id: str
+    structured: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +158,13 @@ class EventNormalizer:
                 for event in deferred:
                     events.extend(self._feed_message_part(event))
             if role == "assistant" and info.get("time", {}).get("completed"):
-                events.append(RunCompleted(self.session_id, message_id))
+                # The completion update is the authoritative result carried by
+                # the async transport. Keeping it here avoids a follow-up
+                # history request, which is not reliable for structured
+                # OpenCode results on the pinned engine.
+                events.append(
+                    RunCompleted(self.session_id, message_id, info.get("structured"))
+                )
             return events
 
         if event_type in {"message.part.updated", "message.part.delta"}:

@@ -20,9 +20,10 @@ from .persistence import ApprovalAuditLog, SessionStore
 from .runtime import paths
 from .runtime.client import OpenCodeClient
 from .runtime.server import OpenCodeServer
-from .sessions import SessionManager
+from .sessions import RunManager, SessionManager
 from .skills import Skill
 from .tools import Tool, ToolServer
+from .tracing import DiagnosticPolicy, Diagnostics
 from .workspace import Workspace
 
 _APP_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -56,6 +57,7 @@ class App:
     skills: tuple[Skill, ...] = field(default_factory=tuple)
     commands: tuple[Command, ...] = field(default_factory=tuple)
     mcp_servers: tuple[MCPServer, ...] = field(default_factory=tuple)
+    diagnostic_policy: DiagnosticPolicy = field(default_factory=DiagnosticPolicy)
     raw_config: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -126,6 +128,8 @@ class App:
         self._validate_extensions(by_name)
         if not isinstance(self.raw_config, Mapping):
             raise TypeError("raw_config must be a mapping")
+        if not isinstance(self.diagnostic_policy, DiagnosticPolicy):
+            raise TypeError("diagnostic_policy must be a DiagnosticPolicy value")
 
     @property
     def project_root(self) -> Path:
@@ -298,6 +302,7 @@ class App:
             engine_directory=self.engine_directory,
             workspace_dirname=self.workspace.dirname if self.workspace else "workspace",
             workspace_folders=self.workspace.folders if self.workspace else (),
+            diagnostic_policy=self.diagnostic_policy,
         )
 
     def run(self) -> None:
@@ -316,6 +321,9 @@ class AgentRuntime:
         self.client: OpenCodeClient | None = None
         self.sessions: SessionManager | None = None
         self.audit: ApprovalAuditLog | None = None
+        self.diagnostics: Diagnostics | None = None
+        self.traces = None
+        self.runs: RunManager | None = None
         self.tool_server = ToolServer(app.tools) if app.tools else None
 
     @property
@@ -341,8 +349,13 @@ class AgentRuntime:
         agents = {agent.name: agent for agent in self.app.agents}
         store = SessionStore(self.app.project_root / ".spiritus")
         audit = ApprovalAuditLog(self.app.project_root / ".spiritus")
+        diagnostics = Diagnostics(
+            self.app.project_root / ".spiritus", self.app.diagnostic_policy
+        )
         self.client = client
         self.audit = audit
+        self.diagnostics = diagnostics
+        self.traces = diagnostics.traces
         self.sessions = SessionManager(
             client,
             agents,
@@ -350,7 +363,9 @@ class AgentRuntime:
             store,
             audit,
             {command.name: command for command in self.app.commands},
+            diagnostics=diagnostics,
         )
+        self.runs = RunManager(self.sessions)
         return self
 
     def _preflight(self, client: OpenCodeClient) -> None:
@@ -409,6 +424,8 @@ class AgentRuntime:
     async def stop(self) -> None:
         self.sessions = None
         self.audit = None
+        self.traces = None
+        self.runs = None
         self.client = None
         await asyncio.to_thread(self.server.stop)
         if self.tool_server is not None:

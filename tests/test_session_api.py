@@ -12,15 +12,22 @@ from spiritus import (
     ApprovalDecision,
     ApprovalRequested,
     Command,
+    DiagnosticPolicy,
+    FailureKind,
     OutputSchema,
     OutputValidationError,
     RunCancelledError,
+    RunStatus,
     StructuredOutputError,
+    TraceFilter,
+    TraceKind,
+    TraceRenderer,
 )
 from spiritus.events import RunCompleted, RunIdle, RunStarted, TextDelta
 from spiritus.persistence import SessionStore
 from spiritus.runtime.client import OpenCodeError
 from spiritus.sessions import SessionInfo, SessionManager
+from spiritus.tracing import RunStore, TraceStore
 
 
 def agent() -> Agent:
@@ -65,6 +72,7 @@ class FakeClient:
         self.last_direct_body = None
         self.history_error = False
         self.with_approval = False
+        self.with_tool = False
         self.last_permission_reply = None
         self.cancel_mode = False
         self.abort_called = threading.Event()
@@ -196,6 +204,47 @@ class FakeClient:
                 },
             }
         }
+        if self.with_tool:
+            yield {
+                "payload": {
+                    "type": "message.part.updated",
+                    "properties": {
+                        "part": {
+                            "id": "prt_tool",
+                            "sessionID": "ses_1",
+                            "messageID": "msg_assistant",
+                            "type": "tool",
+                            "callID": "call_write",
+                            "tool": "write",
+                            "state": {
+                                "status": "running",
+                                "input": {"path": "formatted-resume.json"},
+                                "title": "Writing formatted resume",
+                            },
+                        }
+                    },
+                }
+            }
+            yield {
+                "payload": {
+                    "type": "message.part.updated",
+                    "properties": {
+                        "part": {
+                            "id": "prt_tool",
+                            "sessionID": "ses_1",
+                            "messageID": "msg_assistant",
+                            "type": "tool",
+                            "callID": "call_write",
+                            "tool": "write",
+                            "state": {
+                                "status": "completed",
+                                "input": {"path": "formatted-resume.json"},
+                                "output": "written",
+                            },
+                        }
+                    },
+                }
+            }
         yield {
             "payload": {
                 "type": "message.part.delta",
@@ -277,6 +326,119 @@ def test_direct_result_history_resume_list_and_delete(tmp_path):
 
         await session.delete()
         assert client.deleted == ["ses_1"]
+
+    asyncio.run(scenario())
+
+
+def test_agent_traces_are_persistent_filterable_and_terminal_readable(tmp_path):
+    async def scenario():
+        client = FakeClient()
+        manager = SessionManager(
+            client,
+            {"assistant": agent()},
+            "assistant",
+            SessionStore(tmp_path / ".spiritus"),
+        )
+        session = await manager.resume("ses_1")
+        run = session.start_run("profile.import")
+        run.checkpoint("pdf.text_extracted")
+        result = await run.execute("format this resume")
+
+        records = await session.traces()
+        assert [record.kind for record in records] == [
+            TraceKind.RUN_CHECKPOINT,
+            TraceKind.RUN_STARTED,
+            TraceKind.MODEL_REQUESTED,
+            TraceKind.MODEL_COMPLETED,
+            TraceKind.RUN_COMPLETED,
+        ]
+        assert records[0].data == {"name": "pdf.text_extracted", "detail": {}}
+        assert records[2].data == {"mode": "direct", "prompt": "format this resume"}
+        assert (tmp_path / ".spiritus" / "traces.jsonl").is_file()
+        record = manager.runs.list(operation="profile.import", status=RunStatus.COMPLETED)
+        assert len(record) == 1
+        assert result.run_id == run.run_id
+        assert record[0].artifacts["agent.output"] == "direct result"
+        assert [stage.name for stage in record[0].stages] == [
+            "pdf.text_extracted",
+            "agent.completed",
+        ]
+        assert manager.runs.events(record[0].run_id) == records
+
+        requested = await session.traces(
+            TraceFilter(kinds=frozenset({TraceKind.MODEL_REQUESTED}))
+        )
+        assert requested == [records[2]]
+        rendered = TraceRenderer(color=False).render_many(records)
+        assert "MODEL.REQUESTED" in rendered
+        assert "model=opencode/test-model" in rendered
+
+    asyncio.run(scenario())
+
+
+def test_diagnostic_policy_redacts_and_can_omit_retained_inputs_outputs(tmp_path):
+    policy = DiagnosticPolicy(
+        capture_inputs=False,
+        redactions=("top-secret",),
+    )
+    traces = TraceStore(tmp_path / ".spiritus", policy)
+    traces.append(
+        TraceKind.MODEL_REQUESTED,
+        run_id="run_abc",
+        session_id="ses_1",
+        data={"prompt": "top-secret", "arguments": {"token": "top-secret"}},
+    )
+    assert traces.entries()[0].data == {}
+
+    runs = RunStore(tmp_path / ".spiritus", policy)
+    runs.create(
+        run_id="run_abc",
+        operation="profile.import",
+        session_id="ses_1",
+        agent="parser",
+        model="opencode/test",
+    )
+    runs.complete("run_abc", artifacts={"agent.output": "top-secret"})
+    assert runs.artifact("run_abc", "agent.output") == "[REDACTED]"
+
+    no_outputs = RunStore(tmp_path / "without-output", DiagnosticPolicy(capture_outputs=False))
+    no_outputs.create(
+        run_id="run_def",
+        operation="profile.import",
+        session_id="ses_1",
+        agent="parser",
+        model="opencode/test",
+    )
+    no_outputs.complete("run_def", artifacts={"agent.output": "private"})
+    with pytest.raises(KeyError):
+        no_outputs.artifact("run_def", "agent.output")
+
+
+def test_streaming_trace_captures_tool_input_output_and_file_target(tmp_path):
+    async def scenario():
+        client = FakeClient()
+        client.with_tool = True
+        manager = SessionManager(
+            client,
+            {"assistant": agent()},
+            "assistant",
+            SessionStore(tmp_path / ".spiritus"),
+        )
+        session = await manager.resume("ses_1")
+        handle = await session.send("format this resume")
+        await handle.result()
+
+        records = await session.traces()
+        tool_records = [record for record in records if record.kind.value.startswith("tool.")]
+        assert [record.kind for record in tool_records] == [
+            TraceKind.TOOL_STARTED,
+            TraceKind.TOOL_PROGRESS,
+            TraceKind.TOOL_COMPLETED,
+        ]
+        assert tool_records[0].data["arguments"]["path"] == "formatted-resume.json"
+        assert tool_records[-1].data["output"] == "written"
+        file_records = [record for record in records if record.kind is TraceKind.FILE_WRITTEN]
+        assert file_records[0].data["path"] == "formatted-resume.json"
 
     asyncio.run(scenario())
 
@@ -395,6 +557,14 @@ def test_declared_command_runs_directly_and_is_persisted(tmp_path):
         stored = SessionStore(tmp_path / ".spiritus").load("ses_1")
         assert stored[-2]["command"] == "validate"
         assert stored[-2]["command_arguments"] == "COMMAND_OK"
+        trace = await session.traces()
+        assert [record.kind for record in trace] == [
+            TraceKind.RUN_STARTED,
+            TraceKind.MODEL_REQUESTED,
+            TraceKind.MODEL_COMPLETED,
+            TraceKind.RUN_COMPLETED,
+        ]
+        assert trace[1].data["mode"] == "command"
         with pytest.raises(ValueError, match="unknown command"):
             await session.run_command("missing")
 
@@ -526,5 +696,15 @@ def test_spiritus_revalidates_engine_structured_values(tmp_path):
                     "required": ["count"],
                 },
             )
+        record = manager.runs.list(status="failed")[-1]
+        assert record.failure is not None
+        assert record.failure.kind is FailureKind.OUTPUT_SCHEMA_INVALID
+        assert record.failure.owner == "application_contract"
+        assert record.failure.field_paths == ("count",)
+        assert [stage.name for stage in record.stages] == [
+            "agent.completed",
+            "output.parsed",
+            "output.validated",
+        ]
 
     asyncio.run(scenario())

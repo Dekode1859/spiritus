@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import email
 import http.server
+import inspect
 import json
 import os
 import sys
@@ -19,6 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..config import AppConfig
+from ..tracing import Diagnostics
 from . import paths
 from .lifecycle import ShutdownCoordinator
 from .server import OpenCodeServer
@@ -293,7 +295,13 @@ def run(config: AppConfig):
               file=sys.stderr)
 
     bridge_cls = config.bridge_cls or Bridge
-    bridge = bridge_cls(config, opencode)
+    diagnostics = Diagnostics(proot / ".spiritus", config.diagnostic_policy)
+    try:
+        inspect.signature(bridge_cls).bind(config, opencode, diagnostics)
+    except (TypeError, ValueError):
+        bridge = bridge_cls(config, opencode)
+    else:
+        bridge = bridge_cls(config, opencode, diagnostics)
 
     # Serve the app's own UI if it provides one; otherwise the shared chat UI.
     ui_dir = str(config.ui_dir) if config.ui_dir else str(paths.resource_path("ui"))

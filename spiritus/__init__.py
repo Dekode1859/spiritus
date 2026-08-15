@@ -48,12 +48,14 @@ from .models import Model
 from .permissions import Access, ApprovalDecision
 from .runtime import run
 from .sessions import (
+    ApplicationRun,
     Message,
     OutputSchema,
     OutputValidationError,
     RunCancelledError,
     RunExecutionError,
     RunHandle,
+    RunManager,
     RunResult,
     Session,
     SessionInfo,
@@ -61,6 +63,23 @@ from .sessions import (
 )
 from .skills import Skill
 from .tools import Tool, ToolContext
+from .tracing import (
+    DiagnosticPolicy,
+    Diagnostics,
+    FailureKind,
+    FailureLayer,
+    RunFailure,
+    RunRecord,
+    RunStage,
+    RunStatus,
+    RunStore,
+    StageStatus,
+    TraceFilter,
+    TraceKind,
+    TraceRecord,
+    TraceRenderer,
+    TraceStore,
+)
 from .updates import (
     GitHubReleaseSource,
     GitLabReleaseSource,
@@ -89,6 +108,7 @@ from .workspace import Workspace, WorkspaceAccess
 
 __all__ = [
     "Access",
+    "ApplicationRun",
     "Agent",
     "AgentRuntime",
     "App",
@@ -103,6 +123,8 @@ __all__ = [
     "ApprovalRequested",
     "ApprovalResolved",
     "Command",
+    "DiagnosticPolicy",
+    "Diagnostics",
     "Message",
     "MCPServer",
     "Model",
@@ -114,6 +136,7 @@ __all__ = [
     "RunExecutionError",
     "RunFailed",
     "RunHandle",
+    "RunManager",
     "RunIdle",
     "RunResult",
     "RunStarted",
@@ -129,6 +152,19 @@ __all__ = [
     "ToolFailed",
     "ToolProgress",
     "ToolStarted",
+    "FailureLayer",
+    "FailureKind",
+    "RunFailure",
+    "RunRecord",
+    "RunStatus",
+    "RunStage",
+    "RunStore",
+    "StageStatus",
+    "TraceFilter",
+    "TraceKind",
+    "TraceRecord",
+    "TraceRenderer",
+    "TraceStore",
     "WorkspaceFolder",
     "Workspace",
     "WorkspaceAccess",

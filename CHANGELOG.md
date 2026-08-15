@@ -10,6 +10,20 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
+## [0.0.35] - 2026-08-15
+
+### Added
+- Added a shared diagnostics service for session and desktop-bridge runs,
+  including filtered live terminal output through `spiritus dev run.py`.
+- Added durable launch records, correlated trace events, structured run
+  artifacts, checkpoint events, and process-crash diagnostics.
+
+### Fixed
+- Structured bridge results are captured from completion events and recovered
+  locally when the pinned OpenCode history endpoint rejects schema output.
+- Terminal failures now show their failure kind, owning layer, and error
+  message inline.
+
 ## [0.0.34] - 2026-08-11
 
 ### Added
@@ -184,7 +198,8 @@ the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
 shell, OpenCode process lifecycle, storage primitives, provider abstraction,
 and shared chat UI.
 
-[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.34...HEAD
+[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.35...HEAD
+[0.0.35]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.35
 [0.0.34]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.34
 [0.0.33]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.33
 [0.0.32]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.32

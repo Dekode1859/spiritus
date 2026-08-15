@@ -24,6 +24,7 @@ from .bundle_config import (
     write_platform_scripts,
 )
 from .bundling import BundleError, BundleResource, BundleSpec, build_bundle, check_bundle
+from .dev import cmd_dev
 
 
 def _human(n: int) -> str:
@@ -277,6 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("engine-info", help="show engine resolution and version details")
     p.set_defaults(func=cmd_engine_info)
+
+    p = sub.add_parser("dev", help="launch an app and render its durable diagnostics live")
+    p.add_argument("entrypoint", help="Python application entrypoint, for example run.py")
+    p.add_argument("entrypoint_args", nargs="*", help="arguments passed to the entrypoint")
+    p.add_argument("--project-root", default=None, help="app root for .spiritus diagnostics (default: entrypoint directory)")
+    p.add_argument("--level", choices=("normal", "verbose", "trace"), default="normal", help="terminal diagnostic detail level")
+    p.add_argument("--no-color", action="store_true", help="disable ANSI colour in diagnostic output")
+    p.set_defaults(func=cmd_dev)
 
     p = sub.add_parser("bundle", help="initialize or build a one-folder application bundle")
     p.add_argument("action", nargs="?", choices=("init",), default=None,

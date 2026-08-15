@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.34"
+uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.35"
 ```
 
 ```bash
-pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.34"
+pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.35"
 ```
 
 Applications can then start with the public runtime contract:
@@ -98,6 +98,11 @@ The same `App` surface now composes named workspaces and approvals, JSON Schema
 results, typed Python tools, declared subagents, packaged skills and commands,
 and managed local MCP servers. The 0.0.31 bundle builder now provides the
 reusable frozen application layer; native installers remain application-owned.
+
+For developer-facing diagnosis of agent behaviour, see
+[agent tracing](docs/agent-tracing.md): durable per-run timelines include the
+model request, tool activity, approvals, file writes, and classified terminal
+failures.
 
 The 0.0.3x packaging workflow provides a manifest-driven PyInstaller bundle builder. The
 repository-owned `spiritus.bundle.toml` file keeps the application inputs and
@@ -154,6 +159,16 @@ Resolution order:
 3. The per-user cache populated by `install-engine`.
 
 ## Development
+
+To launch an application entrypoint with its production diagnostics rendered
+live in the terminal:
+
+```powershell
+spiritus dev run.py
+```
+
+The app keeps its normal `.spiritus` run records and trace journal; the command
+adds a local terminal subscriber without changing application logging.
 
 ```bash
 uv sync --group dev
