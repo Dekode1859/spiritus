@@ -257,6 +257,7 @@ def run(config: AppConfig):
 
     tool_server = None
     if isinstance(config, App):
+        config.apply_bundle_environment()
         config.compile()
         if config.tools:
             from ..tools import ToolServer
@@ -265,6 +266,8 @@ def run(config: AppConfig):
         config = config.to_config()
     if not isinstance(config, AppConfig):
         raise TypeError("run() expects an App or AppConfig")
+
+    config.apply_bundle_environment()
 
     import webview  # imported late so non-GUI tooling can import spiritus cleanly
 

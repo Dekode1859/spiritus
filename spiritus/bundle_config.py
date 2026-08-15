@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .bundling import BundleError, BundleResource, BundleSpec
+from .bundling import BundleError, BundleResource, BundleSpec, variant_spec
 from .updates import UpdateConfig
 
 CONFIG_NAME = "spiritus.bundle.toml"
@@ -33,6 +33,29 @@ def _mapping(values: object, label: str) -> dict[str, str]:
     if not isinstance(values, dict):
         raise BundleError(f"{label} must be a TOML table")
     return {str(key): str(value) for key, value in values.items()}
+
+
+def _path_value(value: object, root: Path, label: str) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, (str, Path)):
+        raise BundleError(f"{label} must be a path")
+    path = Path(value)
+    return (path if path.is_absolute() else root / path).resolve()
+
+
+def _deep_merge(base: object, override: object, label: str) -> dict:
+    if base is None:
+        base = {}
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        raise BundleError(f"{label} must be a TOML table")
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value, label)
+        else:
+            result[key] = value
+    return result
 
 
 def _command(value: object, label: str) -> tuple[str, ...]:
@@ -119,6 +142,7 @@ class BundleConfig:
     installer: tuple[str, ...] = ()
     platform_hooks: dict[str, dict[str, tuple[str, ...]]] | None = None
     updates: UpdateConfig | None = None
+    variant: str = "production"
 
     def _bundle_dir_for(self, platform: str) -> Path:
         suffix = ".app" if platform == "macos" else ""
@@ -153,6 +177,11 @@ class BundleConfig:
             "app_id": self.spec.app_id,
             "name": self.spec.name,
             "platform": selected,
+            "variant": self.variant,
+            "install_dir": self.spec.install_dir or "",
+            "config_dir": self.spec.config_dir or "",
+            "workspace_dir": self.spec.workspace_dir or "",
+            "update_channel": self.spec.update_channel or "",
         }
         return tuple(item.format(**values) for item in command)
 
@@ -162,6 +191,7 @@ def load_bundle_config(
     *,
     project_root: Path | None = None,
     defer_resource_validation: bool = False,
+    variant: str = "production",
 ) -> BundleConfig:
     path = Path(path).resolve()
     if not path.is_file():
@@ -174,6 +204,15 @@ def load_bundle_config(
         raise BundleError("unsupported Spiritus bundle spec format")
 
     root = Path(project_root or path.parent).resolve()
+    selected_variant = str(variant).strip().lower() or "production"
+    if selected_variant not in {"production", "dev"}:
+        raise BundleError("bundle variant must be 'production' or 'dev'")
+    variants = payload.get("variants", {})
+    if not isinstance(variants, dict):
+        raise BundleError("variants must be a TOML table")
+    variant_values = variants.get(selected_variant, {})
+    if not isinstance(variant_values, dict):
+        raise BundleError(f"variants.{selected_variant} must be a TOML table")
     try:
         data_values = [
             "=".join(_format_value(part, "datas") for part in value.split("=", 1))
@@ -185,25 +224,53 @@ def load_bundle_config(
         ]
         datas = _pairs(data_values, "datas")
         binaries = _pairs(binary_values, "binaries")
+        _, project_version = _project_metadata(root)
         spec = BundleSpec(
             project_root=root,
             entrypoint=str(payload.get("entrypoint", "main.py")),
             name=str(payload["name"]),
             app_id=str(payload["app_id"]),
-            version=str(payload.get("version", "")),
+            version=str(payload.get("version") or project_version),
             datas=datas,
             binaries=binaries,
             collect_packages=tuple(str(item) for item in payload.get("collect_packages", [])),
             hidden_imports=tuple(str(item) for item in payload.get("hidden_imports", [])),
             runtime_env_paths=_mapping(payload.get("runtime_env_paths"), "runtime_env_paths"),
+            runtime_env=_mapping(payload.get("runtime_env"), "runtime_env"),
             seed_files=_mapping(payload.get("seed_files"), "seed_files"),
-            output_dir=payload.get("output_dir"),
-            work_dir=payload.get("work_dir"),
+            output_dir=_path_value(payload.get("output_dir"), root, "output_dir"),
+            work_dir=_path_value(payload.get("work_dir"), root, "work_dir"),
             console=bool(payload.get("console", False)),
             icon=payload.get("icon"),
             bundle_identifier=payload.get("bundle_identifier"),
+            install_dir=str(payload["install_dir"]) if payload.get("install_dir") is not None else None,
+            config_dir=str(payload["config_dir"]) if payload.get("config_dir") is not None else None,
+            workspace_dir=str(payload["workspace_dir"]) if payload.get("workspace_dir") is not None else None,
+            update_channel=str(payload["update_channel"]) if payload.get("update_channel") is not None else None,
+            installer_metadata=_mapping(payload.get("installer_metadata"), "installer_metadata"),
             defer_resource_validation=defer_resource_validation,
         )
+        if selected_variant == "dev":
+            overrides = dict(variant_values)
+            if "version" not in overrides and overrides.get("version_suffix") is not None:
+                overrides["version"] = f"{spec.version}{overrides['version_suffix']}"
+            for field_name in ("output_dir", "work_dir"):
+                if field_name in overrides:
+                    overrides[field_name] = _path_value(
+                        overrides[field_name], root, f"variants.dev.{field_name}"
+                    )
+            if "runtime_env" not in overrides and "environment" in overrides:
+                overrides["runtime_env"] = overrides.pop("environment")
+            if "installer_metadata" not in overrides and "installer" in overrides:
+                overrides["installer_metadata"] = overrides.pop("installer")
+            for field_name, label in (
+                ("runtime_env", "variants.dev.runtime_env"),
+                ("runtime_env_paths", "variants.dev.runtime_env_paths"),
+                ("installer_metadata", "variants.dev.installer_metadata"),
+            ):
+                if field_name in overrides:
+                    overrides[field_name] = _mapping(overrides[field_name], label)
+            spec = variant_spec(spec, selected_variant, overrides=overrides)
     except (KeyError, TypeError, ValueError) as exc:
         raise BundleError(f"invalid bundle settings in {path}") from exc
 
@@ -213,6 +280,8 @@ def load_bundle_config(
     hooks = payload.get("hooks", {})
     if not isinstance(hooks, dict):
         raise BundleError("hooks must be a TOML table")
+    if variant_values.get("hooks") is not None:
+        hooks = _deep_merge(hooks, variant_values["hooks"], "hooks")
     platform_hooks = {}
     for platform in SUPPORTED_PLATFORMS:
         values = hooks.get(platform, {})
@@ -223,10 +292,18 @@ def load_bundle_config(
             for kind in ("prepare", "verify", "installer")
         }
     updates = None
-    if payload.get("updates") is not None:
+    update_payload = payload.get("updates")
+    if variant_values.get("updates") is not None:
+        update_payload = _deep_merge(update_payload, variant_values["updates"], "updates")
+    if update_payload is not None:
         try:
+            if not isinstance(update_payload, dict):
+                raise TypeError("updates must be a TOML table")
+            update_payload = dict(update_payload)
+            if spec.update_channel:
+                update_payload["channel"] = spec.update_channel
             updates = UpdateConfig.from_mapping(
-                payload["updates"],
+                update_payload,
                 app_id=spec.app_id,
                 current_version=spec.version,
             )
@@ -242,6 +319,7 @@ def load_bundle_config(
         installer=_command(hooks.get("installer"), "hooks.installer"),
         platform_hooks=platform_hooks,
         updates=updates,
+        variant=selected_variant,
     )
 
 
@@ -285,6 +363,16 @@ def render_config(
         "",
         "[seed_files]",
         "# \"bundle/config.json\" = \"config.json\"",
+        "",
+        "[variants.dev]",
+        "# Development derives a unique name, app id, version, data directory,",
+        "# workspace, update channel, and installer metadata from production.",
+        "# entrypoint = \"main_dev.py\"",
+        "# output_dir = \"dist-dev\"",
+        "# work_dir = \"build/spiritus-dev\"",
+        "# update_channel = \"dev\"",
+        "# [variants.dev.runtime_env]",
+        "# PERSONA_APP_ID = \"persona-dev\"",
         "",
         "[hooks]",
         "# prepare = [\"uv\", \"run\", \"python\", \"packaging/prepare-assets.py\"]",
@@ -345,18 +433,19 @@ def render_platform_script(config: BundleConfig, platform: str) -> str:
     if platform not in config.platforms:
         raise BundleError(f"platform {platform!r} is not enabled in {config.path}")
     relative_config = config.path.relative_to(config.project_root).as_posix()
+    variant_arg = "" if config.variant == "production" else " --variant " + config.variant
     if platform == "windows":
         lines = [
             '$ErrorActionPreference = "Stop"',
             "$Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path",
             "Push-Location $Root",
             "try {",
-            f"    uv run spiritus bundle --project-root $Root --config {_ps_quote(relative_config)}",
+            f"    uv run spiritus bundle{variant_arg} --project-root $Root --config {_ps_quote(relative_config)}",
             "    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-            f"    uv run spiritus bundle-check --project-root $Root --config {_ps_quote(relative_config)} --run-verify",
+            f"    uv run spiritus bundle-check{variant_arg} --project-root $Root --config {_ps_quote(relative_config)} --run-verify",
             "    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
         ]
-        if config.installer:
+        if config.commands("installer", platform):
             command = config.commands("installer", platform)
             lines.extend([
                 "    $Installer = @(",
@@ -373,10 +462,10 @@ def render_platform_script(config: BundleConfig, platform: str) -> str:
         "set -euo pipefail",
         'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
         "cd \"$ROOT\"",
-        f"uv run spiritus bundle --project-root \"$ROOT\" --config {shlex.quote(relative_config)}",
-        f"uv run spiritus bundle-check --project-root \"$ROOT\" --config {shlex.quote(relative_config)} --run-verify",
+        f"uv run spiritus bundle{variant_arg} --project-root \"$ROOT\" --config {shlex.quote(relative_config)}",
+        f"uv run spiritus bundle-check{variant_arg} --project-root \"$ROOT\" --config {shlex.quote(relative_config)} --run-verify",
     ]
-    if config.installer:
+    if config.commands("installer", platform):
         lines.append(" ".join(shlex.quote(item) for item in config.commands("installer", platform)))
     lines.append("")
     return "\n".join(lines)

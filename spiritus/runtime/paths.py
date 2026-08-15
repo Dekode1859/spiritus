@@ -56,7 +56,12 @@ def app_data_dir(app_id: str) -> Path:
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
 
-    d = base / app_id
+    override = os.environ.get("SPIRITUS_CONFIG_DIR", "").strip()
+    if override:
+        configured = Path(override)
+        d = configured if configured.is_absolute() else base / configured
+    else:
+        d = base / app_id
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -74,7 +79,10 @@ def workspace_path(app_root: Path, app_id: str, dirname: str) -> Path:
     ``dirname`` and any folder semantics are supplied by the application;
     Spiritus only joins paths and ensures the root exists.
     """
-    env_ws = os.environ.get("WORKSPACE_PATH", "").strip()
+    env_ws = (
+        os.environ.get("SPIRITUS_WORKSPACE_PATH", "").strip()
+        or os.environ.get("WORKSPACE_PATH", "").strip()
+    )
     if env_ws:
         p = Path(env_ws)
     else:

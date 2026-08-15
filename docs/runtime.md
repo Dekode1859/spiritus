@@ -63,7 +63,7 @@ every application author to understand OpenCode's lower-level configuration.
 
 ## Packaging direction
 
-The 0.0.3x packaging workflow provides a manifest-driven one-folder
+The packaging workflow provides a manifest-driven one-folder
 PyInstaller builder. `spiritus bundle init` creates a repository-owned
 `spiritus.bundle.toml` spec and platform wrappers; `spiritus bundle` collects
 the Spiritus runtime and accepts application-owned data, binaries, optional
@@ -71,6 +71,13 @@ packages, runtime resource paths, and first-launch seed files. The result
 includes a `spiritus-bundle.json` manifest for application validation, while
 `spiritus bundle-check` also checks declared source resources and build
 dependencies.
+
+One specification can produce the unchanged production bundle and an isolated
+development bundle with `--variant dev`. Development derives a `-dev` version,
+unique application identity and writable paths, and can override its entrypoint,
+output/work directories, installer metadata, update channel, or environment
+variables in `[variants.dev]`. `spiritus package --variant dev` runs the shared
+build, verification, and installer hooks for that variant.
 
 The builder stops before native installers, signing, notarization, and release
 publication. Applications remain responsible for those platform-specific

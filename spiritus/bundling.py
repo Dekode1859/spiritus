@@ -60,18 +60,34 @@ class BundleSpec:
     console: bool = False
     icon: Path | str | None = None
     bundle_identifier: str | None = None
+    variant: str = "production"
+    install_dir: str | None = None
+    config_dir: str | None = None
+    workspace_dir: str | None = None
+    update_channel: str | None = None
+    runtime_env: Mapping[str, str] = field(default_factory=dict)
+    installer_metadata: Mapping[str, str] = field(default_factory=dict)
     defer_resource_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).resolve()
         object.__setattr__(self, "project_root", root)
         object.__setattr__(self, "entrypoint", Path(self.entrypoint))
+        for field_name in ("output_dir", "work_dir"):
+            value = getattr(self, field_name)
+            if value is not None:
+                path = Path(value)
+                if not path.is_absolute():
+                    path = root / path
+                object.__setattr__(self, field_name, path.resolve())
         object.__setattr__(self, "datas", tuple(self.datas))
         object.__setattr__(self, "binaries", tuple(self.binaries))
         object.__setattr__(self, "collect_packages", tuple(self.collect_packages))
         object.__setattr__(self, "hidden_imports", tuple(self.hidden_imports))
         object.__setattr__(self, "runtime_env_paths", dict(self.runtime_env_paths))
+        object.__setattr__(self, "runtime_env", dict(self.runtime_env))
         object.__setattr__(self, "seed_files", dict(self.seed_files))
+        object.__setattr__(self, "installer_metadata", dict(self.installer_metadata))
         self._validate()
 
     @property
@@ -99,6 +115,8 @@ class BundleSpec:
         return (self.work_dir or self.project_root / "build" / "spiritus").resolve()
 
     def _validate(self) -> None:
+        if self.variant not in {"production", "dev"}:
+            raise BundleError("bundle variant must be 'production' or 'dev'")
         if not self.name or self.name in {".", ".."} or "/" in self.name or "\\" in self.name:
             raise BundleError("bundle name must be one filesystem name")
         if not _APP_ID.fullmatch(self.app_id.strip()):
@@ -114,9 +132,24 @@ class BundleSpec:
             if not variable or not variable.replace("_", "").isalnum():
                 raise BundleError(f"invalid runtime environment variable: {variable!r}")
             _bundle_relative(relative, "runtime resource")
+        for variable, value in self.runtime_env.items():
+            if not variable or not variable.replace("_", "").isalnum():
+                raise BundleError(f"invalid runtime environment variable: {variable!r}")
+            if not isinstance(value, str):
+                raise BundleError(f"runtime environment value must be a string: {variable!r}")
         for source, target in self.seed_files.items():
             _bundle_relative(source, "seed source")
             _app_data_relative(target, "seed destination")
+        for label, value in (
+            ("install_dir", self.install_dir),
+            ("config_dir", self.config_dir),
+            ("workspace_dir", self.workspace_dir),
+        ):
+            if value is not None and not str(value).strip():
+                raise BundleError(f"{label} must not be empty")
+        for key, value in self.installer_metadata.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise BundleError("installer metadata keys and values must be strings")
 
     def _validate_resource_declarations(self) -> None:
         for resource in (*self.datas, *self.binaries):
@@ -181,13 +214,14 @@ def _python_literal(value: object) -> str:
 
 
 def _runtime_hook(spec: BundleSpec, directory: Path) -> Path | None:
-    if not spec.runtime_env_paths and not spec.seed_files:
+    if not spec.runtime_env_paths and not spec.runtime_env and not spec.seed_files:
         return None
     directory.mkdir(parents=True, exist_ok=True)
     hook = directory / "spiritus_bundle_runtime.py"
     payload = {
         "app_id": spec.app_id,
         "env_paths": dict(spec.runtime_env_paths),
+        "env_values": dict(spec.runtime_env),
         "seed_files": dict(spec.seed_files),
     }
     hook.write_text(
@@ -198,6 +232,8 @@ def _runtime_hook(spec: BundleSpec, directory: Path) -> Path | None:
         "from spiritus.runtime.paths import app_data_dir\n"
         f"_CONFIG = {_python_literal(payload)}\n"
         "_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))\n"
+        "for _name, _value in _CONFIG['env_values'].items():\n"
+        "    os.environ.setdefault(_name, _value)\n"
         "for _name, _relative in _CONFIG['env_paths'].items():\n"
         "    _path = _ROOT / _relative\n"
         "    if _path.exists():\n"
@@ -305,6 +341,14 @@ def _manifest(spec: BundleSpec, bundle_dir: Path) -> Path:
             "app_id": spec.app_id,
             "name": spec.name,
             "version": spec.version,
+            "variant": spec.variant,
+            "bundle_identifier": spec.bundle_identifier,
+            "install_dir": spec.install_dir,
+            "config_dir": spec.config_dir,
+            "workspace_dir": spec.workspace_dir,
+            "update_channel": spec.update_channel,
+            "installer": dict(spec.installer_metadata),
+            "runtime_env": sorted(set(spec.runtime_env) | set(spec.runtime_env_paths)),
             "platform": sys.platform,
             "files": files,
         }, indent=2) + "\n",
@@ -329,6 +373,121 @@ def _package_version() -> str:
     except ImportError:
         return "unknown"
     return __version__
+
+
+def _dev_version(version: str) -> str:
+    """Append the development prerelease marker before build metadata."""
+    value = str(version).strip() or _package_version()
+    if value.endswith("-dev"):
+        return value
+    base, separator, build = value.partition("+")
+    result = f"{base}-dev"
+    return f"{result}{separator}{build}" if separator else result
+
+
+def _sibling_variant_path(path: Path, suffix: str) -> Path:
+    return path.parent / f"{path.name}-{suffix}"
+
+
+def variant_spec(
+    spec: BundleSpec,
+    variant: str = "production",
+    *,
+    overrides: Mapping[str, object] | None = None,
+) -> BundleSpec:
+    """Return the effective spec for a production or development variant.
+
+    Production is deliberately the identity transform. Development derives a
+    separate identity and writable-data namespace while retaining the source
+    assets and dependency declarations from the base spec.
+    """
+    selected = str(variant).strip().lower() or "production"
+    if selected == "production":
+        if not overrides:
+            return spec
+        raise BundleError("production variants do not accept overrides")
+    if selected != "dev":
+        raise BundleError("bundle variant must be 'production' or 'dev'")
+
+    values = dict(overrides or {})
+    name = str(values.get("name") or f"{spec.name} Dev")
+    app_id = str(values.get("app_id") or f"{spec.app_id}-dev")
+    version = str(values.get("version") or _dev_version(spec.version))
+    bundle_identifier = values.get("bundle_identifier")
+    if bundle_identifier is None:
+        bundle_identifier = (
+            f"{spec.bundle_identifier}.dev" if spec.bundle_identifier else f"{app_id}.dev"
+        )
+    output_dir = values.get("output_dir")
+    if output_dir is None:
+        output_dir = _sibling_variant_path(spec.resolved_output_dir, "dev")
+    work_dir = values.get("work_dir")
+    if work_dir is None:
+        work_dir = _sibling_variant_path(spec.resolved_work_dir, "dev")
+    install_dir = str(values.get("install_dir") or name)
+    config_dir = str(values.get("config_dir") or app_id)
+    workspace_dir = str(values.get("workspace_dir") or "workspace-dev")
+    update_channel = str(values.get("update_channel") or "dev")
+
+    runtime_env = dict(spec.runtime_env)
+    runtime_env.update({
+        "SPIRITUS_APP_VARIANT": "dev",
+        "SPIRITUS_APP_ID": app_id,
+        "SPIRITUS_APP_TITLE": name,
+        "SPIRITUS_CONFIG_DIR": config_dir,
+        "SPIRITUS_WORKSPACE_DIRNAME": workspace_dir,
+        "SPIRITUS_UPDATE_CHANNEL": update_channel,
+    })
+    runtime_env.update({
+        str(key): str(value)
+        for key, value in dict(values.get("runtime_env") or {}).items()
+    })
+    runtime_env_paths = dict(spec.runtime_env_paths)
+    runtime_env_paths.update({
+        str(key): str(value)
+        for key, value in dict(values.get("runtime_env_paths") or {}).items()
+    })
+    installer_metadata = dict(spec.installer_metadata)
+    installer_metadata.update({
+        "variant": "dev",
+        "name": name,
+        "app_id": app_id,
+        "version": version,
+        "install_dir": install_dir,
+        "config_dir": config_dir,
+        "workspace_dir": workspace_dir,
+        "update_channel": update_channel,
+    })
+    installer_metadata.update({
+        str(key): str(value)
+        for key, value in dict(values.get("installer_metadata") or {}).items()
+    })
+    return BundleSpec(
+        project_root=spec.project_root,
+        entrypoint=values.get("entrypoint", spec.entrypoint),
+        name=name,
+        app_id=app_id,
+        version=version,
+        datas=spec.datas,
+        binaries=spec.binaries,
+        collect_packages=spec.collect_packages,
+        hidden_imports=spec.hidden_imports,
+        runtime_env_paths=runtime_env_paths,
+        runtime_env=runtime_env,
+        seed_files=spec.seed_files,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        console=spec.console,
+        icon=spec.icon,
+        bundle_identifier=str(bundle_identifier),
+        variant="dev",
+        install_dir=install_dir,
+        config_dir=config_dir,
+        workspace_dir=workspace_dir,
+        update_channel=update_channel,
+        installer_metadata=installer_metadata,
+        defer_resource_validation=spec.defer_resource_validation,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -393,7 +552,12 @@ def build_bundle(spec: BundleSpec) -> BundleResult:
     return BundleResult(bundle_dir=bundle_dir, manifest=manifest, spec_file=final_spec)
 
 
-def check_bundle(bundle_dir: Path, *, app_id: str | None = None) -> dict:
+def check_bundle(
+    bundle_dir: Path,
+    *,
+    app_id: str | None = None,
+    variant: str | None = None,
+) -> dict:
     """Validate the Spiritus manifest and return its decoded metadata."""
     bundle_dir = Path(bundle_dir).resolve()
     manifest = bundle_dir / "spiritus-bundle.json"
@@ -408,6 +572,10 @@ def check_bundle(bundle_dir: Path, *, app_id: str | None = None) -> dict:
     if app_id is not None and payload.get("app_id") != app_id:
         raise BundleError(
             f"bundle app_id is {payload.get('app_id')!r}, expected {app_id!r}"
+        )
+    if variant is not None and payload.get("variant", "production") != variant:
+        raise BundleError(
+            f"bundle variant is {payload.get('variant', 'production')!r}, expected {variant!r}"
         )
     missing = []
     changed = []
@@ -437,4 +605,5 @@ __all__ = [
     "build_bundle",
     "check_bundle",
     "render_spec",
+    "variant_spec",
 ]

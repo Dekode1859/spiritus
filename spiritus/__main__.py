@@ -23,7 +23,14 @@ from .bundle_config import (
     load_bundle_config,
     write_platform_scripts,
 )
-from .bundling import BundleError, BundleResource, BundleSpec, build_bundle, check_bundle
+from .bundling import (
+    BundleError,
+    BundleResource,
+    BundleSpec,
+    build_bundle,
+    check_bundle,
+    variant_spec,
+)
 from .dev import cmd_dev
 
 
@@ -169,6 +176,7 @@ def cmd_bundle(args) -> int:
                 config_file,
                 project_root=root,
                 defer_resource_validation=True,
+                variant=args.variant,
             )
             if _platform_name() not in config.platforms:
                 raise BundleError(
@@ -195,10 +203,13 @@ def cmd_bundle(args) -> int:
             env_paths = dict(
                 _mapping(value, "--runtime-env-path") for value in args.runtime_env_path
             )
+            runtime_env = dict(
+                _mapping(value, "--runtime-env") for value in args.runtime_env
+            )
             seed_files = dict(
                 _mapping(value, "--seed-file") for value in args.seed_file
             )
-            result = build_bundle(BundleSpec(
+            base_spec = BundleSpec(
                 project_root=root,
                 entrypoint=args.entrypoint,
                 name=args.name,
@@ -209,13 +220,15 @@ def cmd_bundle(args) -> int:
                 collect_packages=tuple(args.collect_package),
                 hidden_imports=tuple(args.hidden_import),
                 runtime_env_paths=env_paths,
+                runtime_env=runtime_env,
                 seed_files=seed_files,
                 output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
                 work_dir=Path(args.work_dir).resolve() if args.work_dir else None,
                 console=args.console,
                 icon=args.icon,
                 bundle_identifier=args.bundle_identifier,
-            ))
+            )
+            result = build_bundle(variant_spec(base_spec, args.variant))
     except (BundleError, ValueError, TypeError, OSError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -228,15 +241,21 @@ def cmd_bundle(args) -> int:
 def cmd_bundle_check(args) -> int:
     try:
         if args.bundle_dir:
-            payload = check_bundle(Path(args.bundle_dir), app_id=args.app_id)
+            payload = check_bundle(
+                Path(args.bundle_dir), app_id=args.app_id, variant=args.variant
+            )
             config = None
         else:
             root = Path(args.project_root).resolve()
-            config = load_bundle_config(_config_path(root, args.config), project_root=root)
+            config = load_bundle_config(
+                _config_path(root, args.config), project_root=root, variant=args.variant
+            )
             missing = check_environment(config)
             if missing:
                 raise BundleError("missing build prerequisites: " + ", ".join(missing))
-            payload = check_bundle(config.bundle_dir, app_id=config.spec.app_id)
+            payload = check_bundle(
+                config.bundle_dir, app_id=config.spec.app_id, variant=config.variant
+            )
             if args.run_verify:
                 _run_hook(config, "verify")
     except (BundleError, OSError, subprocess.CalledProcessError) as exc:
@@ -247,6 +266,37 @@ def cmd_bundle_check(args) -> int:
         f"({payload.get('version') or 'unversioned'})"
     )
     print(f"Files: {len(payload.get('files', []))}")
+    return 0
+
+
+def cmd_package(args) -> int:
+    """Build, verify, and hand the selected bundle to its installer hook."""
+    root = Path(args.project_root).resolve()
+    try:
+        config = load_bundle_config(
+            _config_path(root, args.config),
+            project_root=root,
+            defer_resource_validation=True,
+            variant=args.variant,
+        )
+        if _platform_name() not in config.platforms:
+            raise BundleError(
+                f"bundle spec does not enable the current platform {_platform_name()!r}"
+            )
+        _run_hook(config, "prepare")
+        result = build_bundle(config.spec)
+        payload = check_bundle(
+            result.bundle_dir, app_id=config.spec.app_id, variant=config.variant
+        )
+        _run_hook(config, "verify")
+        if config.commands("installer"):
+            _run_hook(config, "installer")
+    except (BundleError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Packaged: {result.bundle_dir}")
+    print(f"Manifest: {result.manifest}")
+    print(f"Variant: {payload.get('variant', 'production')}")
     return 0
 
 
@@ -292,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="initialize a repository-owned bundle spec and platform scripts")
     p.add_argument("--project-root", default=".", help="application project root")
     p.add_argument("--config", default=None, help=f"bundle spec path (default: {CONFIG_NAME})")
+    p.add_argument("--variant", choices=("production", "dev"), default="production",
+                   help="bundle identity variant (default: production)")
     p.add_argument("--entrypoint", default=None, help="application entry script")
     p.add_argument("--name", default=None, help="bundle and executable name")
     p.add_argument("--app-id", default=None, help="stable writable-data identifier")
@@ -317,6 +369,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="set an environment variable to a bundle resource path (repeatable)",
     )
     p.add_argument(
+        "--runtime-env", action="append", default=[], metavar="NAME=VALUE",
+        help="set a static runtime environment variable (repeatable)",
+    )
+    p.add_argument(
         "--seed-file", action="append", default=[], metavar="BUNDLE_PATH=APP_DATA_PATH",
         help="copy a bundled file to writable app data on first launch (repeatable)",
     )
@@ -332,11 +388,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("bundle-check", help="validate a Spiritus spec, environment, and bundle manifest")
     p.add_argument("bundle_dir", nargs="?", help="built bundle directory; omit to use the repository spec")
+    p.add_argument("--variant", choices=("production", "dev"), default="production",
+                   help="bundle identity variant (default: production)")
     p.add_argument("--app-id", default=None, help="expected application id")
     p.add_argument("--project-root", default=".", help="application project root")
     p.add_argument("--config", default=None, help=f"bundle spec path (default: {CONFIG_NAME})")
     p.add_argument("--run-verify", action="store_true", help="run the configured application smoke check")
     p.set_defaults(func=cmd_bundle_check)
+
+    p = sub.add_parser(
+        "package",
+        help="build, verify, and invoke the configured installer for a bundle variant",
+    )
+    p.add_argument("--variant", choices=("production", "dev"), default="production",
+                   help="bundle identity variant (default: production)")
+    p.add_argument("--project-root", default=".", help="application project root")
+    p.add_argument("--config", default=None, help=f"bundle spec path (default: {CONFIG_NAME})")
+    p.set_defaults(func=cmd_package)
 
     return parser
 

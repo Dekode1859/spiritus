@@ -10,6 +10,19 @@ the new version and publishes it. Leaving it alone releases nothing.
 
 ## [Unreleased]
 
+## [0.0.36] - 2026-08-16
+
+### Added
+- Added production and development bundle variants from one
+  `spiritus.bundle.toml` specification.
+- Added `--variant dev` to `spiritus bundle` and `spiritus bundle-check`, plus
+  `spiritus package` for build, verification, and installer handoff.
+- Development bundles derive isolated names, versions, app identities, data
+  directories, workspaces, update channels, runtime environment, and installer
+  metadata while reusing the production asset pipeline.
+- Added variant coverage for bundle manifests, CLI checks, and project-relative
+  TOML output and work paths.
+
 ## [0.0.35] - 2026-08-15
 
 ### Added
@@ -198,7 +211,8 @@ the initial `AppConfig`, `WorkspaceFolder`, and `run()` contract, application
 shell, OpenCode process lifecycle, storage primitives, provider abstraction,
 and shared chat UI.
 
-[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.35...HEAD
+[Unreleased]: https://github.com/Dekode1859/Spiritus/compare/v0.0.36...HEAD
+[0.0.36]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.36
 [0.0.35]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.35
 [0.0.34]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.34
 [0.0.33]: https://github.com/Dekode1859/Spiritus/releases/tag/v0.0.33

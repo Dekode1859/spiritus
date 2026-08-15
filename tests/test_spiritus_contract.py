@@ -94,8 +94,9 @@ def test_public_api_is_exactly_the_documented_surface():
         "UpdateVerificationError",
         "VersionPolicy",
         "build_bundle",
-        "check_bundle",
-        "run",
+            "check_bundle",
+            "variant_spec",
+            "run",
     }
     for name in spiritus.__all__:
         assert hasattr(spiritus, name)
