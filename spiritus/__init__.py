@@ -25,6 +25,7 @@ from .bundling import (
     BundleSpec,
     build_bundle,
     check_bundle,
+    variant_spec,
 )
 from .commands import Command
 from .config import AppConfig, WebViewConfig, WindowConfig, WorkspaceFolder
@@ -192,6 +193,7 @@ __all__ = [
     "SubprocessInstallerHandoff",
     "build_bundle",
     "check_bundle",
+    "variant_spec",
     "run",
 ]
 

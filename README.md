@@ -43,11 +43,11 @@ The distribution and import package are both named **`spiritus`**. There is no
 PyPI release yet; install from git, pinned to a tag:
 
 ```bash
-uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.35"
+uv add "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.36"
 ```
 
 ```bash
-pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.35"
+pip install "spiritus[bundle] @ git+https://github.com/Dekode1859/Spiritus@v0.0.36"
 ```
 
 Applications can then start with the public runtime contract:
@@ -104,7 +104,7 @@ For developer-facing diagnosis of agent behaviour, see
 model request, tool activity, approvals, file writes, and classified terminal
 failures.
 
-The 0.0.3x packaging workflow provides a manifest-driven PyInstaller bundle builder. The
+The packaging workflow provides a manifest-driven PyInstaller bundle builder. The
 repository-owned `spiritus.bundle.toml` file keeps the application inputs and
 build hooks stable, while Spiritus supplies one workflow for initialization,
 building, and checking:
@@ -113,6 +113,9 @@ building, and checking:
 spiritus bundle init --platform all
 spiritus bundle
 spiritus bundle-check --run-verify
+spiritus bundle --variant dev
+spiritus bundle-check --variant dev --run-verify
+spiritus package --variant dev
 ```
 
 `bundle init` detects the project metadata and entrypoint, creates the bundle
@@ -122,6 +125,12 @@ and writes a `spiritus-bundle.json` manifest. `bundle-check` validates the
 declared resources, installed build dependencies, manifest hashes, and the
 optional application smoke check. Existing explicit `spiritus bundle` flags
 remain supported for applications that do not want a persistent spec.
+
+The `dev` variant derives a `-dev` version, a ` Dev` display name, a unique app
+identity, writable data directory, workspace, update channel, and installer
+metadata. Both variants use the same declared assets, preparation hooks,
+dependency collection, verification, and installer pipeline, while their
+runtime environment keeps config, logs, staged updates, and workspaces apart.
 
 Application-owned files, optional packages, binaries, runtime resource paths,
 and first-launch seed files remain external inputs. Native installers,

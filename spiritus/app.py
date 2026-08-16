@@ -135,6 +135,20 @@ class App:
     def project_root(self) -> Path:
         return paths.project_root(self.root, self.id)
 
+    def apply_bundle_environment(self) -> None:
+        """Apply identity and workspace overrides emitted by a bundle variant."""
+        app_id = os.environ.get("SPIRITUS_APP_ID", "").strip()
+        if app_id:
+            if not _APP_ID.fullmatch(app_id):
+                raise ValueError("SPIRITUS_APP_ID is not a valid application id")
+            self.id = app_id
+        title = os.environ.get("SPIRITUS_APP_TITLE", "").strip()
+        if title:
+            self.title = title
+        workspace_dirname = os.environ.get("SPIRITUS_WORKSPACE_DIRNAME", "").strip()
+        if workspace_dirname and self.workspace is not None:
+            self.workspace = Workspace(self.workspace.folders, dirname=workspace_dirname)
+
     @property
     def engine_directory(self) -> Path:
         """Empty worktree used to keep app/config files outside agent scope."""
@@ -316,6 +330,7 @@ class AgentRuntime:
     """One managed OpenCode process implementing an ``App`` definition."""
 
     def __init__(self, app: App):
+        app.apply_bundle_environment()
         self.app = app
         self.server = OpenCodeServer(app.project_root)
         self.client: OpenCodeClient | None = None

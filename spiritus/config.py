@@ -9,6 +9,7 @@ agent abstractions continue to grow around it.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -157,6 +158,18 @@ class AppConfig:
             self.engine_directory = (
                 engine if engine.is_absolute() else self.app_root / engine
             )
+
+    def apply_bundle_environment(self) -> None:
+        """Apply identity and workspace overrides emitted by a bundle variant."""
+        app_id = os.environ.get("SPIRITUS_APP_ID", "").strip()
+        if app_id:
+            self.app_id = app_id
+        title = os.environ.get("SPIRITUS_APP_TITLE", "").strip()
+        if title:
+            self.app_title = title
+        workspace_dirname = os.environ.get("SPIRITUS_WORKSPACE_DIRNAME", "").strip()
+        if workspace_dirname:
+            self.workspace_dirname = workspace_dirname
 
     def resolved_window(self) -> WindowConfig:
         """Return the new window contract, preserving legacy options."""

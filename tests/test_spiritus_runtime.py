@@ -31,6 +31,13 @@ class TestPaths:
         assert paths.workspace_path(tmp_path, "any-app", "workspace") == override
         assert override.is_dir()
 
+    def test_spiritus_variant_workspace_override_isolated(self, tmp_path, monkeypatch):
+        override = tmp_path / "variant-workspace"
+        monkeypatch.setenv("SPIRITUS_WORKSPACE_PATH", str(override))
+        monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path / "production-workspace"))
+        assert paths.workspace_path(tmp_path, "app-dev", "workspace") == override
+        assert override.is_dir()
+
     def test_blank_env_override_is_ignored(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WORKSPACE_PATH", "   ")
         assert paths.workspace_path(tmp_path, "any-app", "ws") == tmp_path / "ws"
@@ -86,6 +93,12 @@ class TestAppDataDir:
         monkeypatch.setattr(paths.sys, "platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "new"))
         assert paths.app_data_dir("my-app").is_dir()
+
+    def test_variant_config_dir_override_isolated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setenv("SPIRITUS_CONFIG_DIR", "my-app-dev")
+        assert paths.app_data_dir("my-app") == tmp_path / "my-app-dev"
 
     def test_no_platform_puts_data_under_a_foreign_convention(self, tmp_path, monkeypatch):
         """The bug this replaced: every OS got the macOS path."""

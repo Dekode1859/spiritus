@@ -13,6 +13,7 @@ from spiritus.bundling import (
     BundleSpec,
     check_bundle,
     render_spec,
+    variant_spec,
 )
 
 
@@ -57,6 +58,55 @@ def test_runtime_hook_is_rendered_for_external_runtime_resources(tmp_path):
     assert "BROWSER_PATH" in source
     assert "opencode.json" in source
     assert "example-app" in source
+
+
+def test_dev_variant_derives_an_isolated_identity_and_paths(tmp_path: Path):
+    spec = _spec(tmp_path)
+    dev = variant_spec(spec, "dev")
+
+    assert dev.variant == "dev"
+    assert dev.name == "Example Dev"
+    assert dev.app_id == "example-app-dev"
+    assert dev.version == "1.2.3-dev"
+    assert dev.bundle_identifier == "example-app-dev.dev"
+    assert dev.resolved_output_dir == tmp_path / "dist-dev"
+    assert dev.resolved_work_dir == tmp_path / "build" / "spiritus-dev"
+    assert dev.config_dir == "example-app-dev"
+    assert dev.workspace_dir == "workspace-dev"
+    assert dev.update_channel == "dev"
+    assert dev.runtime_env["SPIRITUS_APP_ID"] == "example-app-dev"
+    assert dev.datas == spec.datas
+    assert dev.collect_packages == spec.collect_packages
+
+
+def test_toml_paths_are_resolved_against_project_root(tmp_path: Path):
+    (tmp_path / "main.py").write_text("pass\n", encoding="utf-8")
+    config_path = tmp_path / "spiritus.bundle.toml"
+    config_path.write_text(
+        """format = 1
+platforms = ["windows"]
+entrypoint = "main.py"
+name = "Example"
+app_id = "example"
+version = "1.0.0"
+output_dir = "artifacts/prod"
+work_dir = "build/prod"
+
+[variants.dev]
+entrypoint = "main.py"
+""",
+        encoding="utf-8",
+    )
+
+    from spiritus.bundle_config import load_bundle_config
+
+    production = load_bundle_config(config_path, project_root=tmp_path)
+    dev = load_bundle_config(config_path, project_root=tmp_path, variant="dev")
+
+    assert production.spec.output_dir == tmp_path / "artifacts" / "prod"
+    assert production.spec.work_dir == tmp_path / "build" / "prod"
+    assert dev.spec.resolved_output_dir == tmp_path / "artifacts" / "prod-dev"
+    assert dev.spec.resolved_work_dir == tmp_path / "build" / "prod-dev"
 
 
 @pytest.mark.parametrize("value", ["../outside", "/absolute", "C:\\outside"])
